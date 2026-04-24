@@ -7,37 +7,36 @@ namespace FishNet.Transporting.EpicNetPlugin
 {
     internal sealed class ClientHostPeer : CommonPeer
     {
-        ServerPeer _server;
+        ClientHostBridge _bridge;
         Queue<LocalPacket> _incoming = new Queue<LocalPacket>(64);
+
+        internal void Bind(ClientHostBridge bridge)
+        {
+            _bridge = bridge;
+        }
 
         internal bool StartConnection(ServerPeer serverPeer)
         {
-            if (serverPeer is null) return false;
+            if (serverPeer is null || _bridge is null) return false;
 
-            _server = serverPeer;
-            _server.SetClientHostPeer(this);
+            _bridge.Bind(serverPeer, this);
+            serverPeer.SetClientHostBridge(_bridge);
 
             if (GetLocalConnectionState() != LocalConnectionState.Stopped) return false;
-            if (_server.GetLocalConnectionState() is not (LocalConnectionState.Started or LocalConnectionState.Starting))
-                return false;
 
             SetLocalConnectionState(LocalConnectionState.Starting, false);
 
-            // Immediate check to avoid race condition
-            if (_server.GetLocalConnectionState() == LocalConnectionState.Started)
+            if (serverPeer.GetLocalConnectionState() == LocalConnectionState.Started)
             {
                 SetLocalConnectionState(LocalConnectionState.Started, false);
             }
-            // No waiting flag needed, PollServerReady will handle the transition
             return true;
         }
 
         internal void PollServerReady()
         {
-            if (_server is null) return;
-
             if (GetLocalConnectionState() == LocalConnectionState.Starting &&
-                _server.GetLocalConnectionState() == LocalConnectionState.Started)
+                _bridge != null && _bridge._serverStarted)
             {
                 SetLocalConnectionState(LocalConnectionState.Started, false);
             }
@@ -47,7 +46,7 @@ namespace FishNet.Transporting.EpicNetPlugin
         {
             base.SetLocalConnectionState(connectionState, server);
             if (connectionState is LocalConnectionState.Started or LocalConnectionState.Stopped)
-                _server?.HandleClientHostConnectionStateChange(connectionState, server);
+                _bridge?.OnClientHostState(connectionState);
         }
 
         internal bool StopConnection()
@@ -58,13 +57,14 @@ namespace FishNet.Transporting.EpicNetPlugin
             ClearQueue(ref _incoming);
             SetLocalConnectionState(LocalConnectionState.Stopping, false);
             SetLocalConnectionState(LocalConnectionState.Stopped, false);
-            _server?.SetClientHostPeer(null);
+            _bridge?.Stop();
             return true;
         }
 
         internal void IterateIncoming()
         {
             if (GetLocalConnectionState() != LocalConnectionState.Started) return;
+            _bridge?.ProcessClientHostIncoming();
 
             while (_incoming.Count > 0)
             {
@@ -76,13 +76,15 @@ namespace FishNet.Transporting.EpicNetPlugin
             }
         }
 
-        internal void ReceivedFromLocalServer(LocalPacket packet) => _incoming.Enqueue(packet);
+        internal void InternalReceiveFromServer(LocalPacket packet)
+        {
+            _incoming.Enqueue(packet);
+        }
 
         internal void SendToServer(byte channelId, ArraySegment<byte> segment)
         {
             if (GetLocalConnectionState() != LocalConnectionState.Started) return;
-            if (_server?.GetLocalConnectionState() != LocalConnectionState.Started) return;
-            _server.ReceivedFromClientHost(new LocalPacket(segment, channelId));
+            _bridge?.ClientSendToServer(new LocalPacket(segment, channelId));
         }
     }
 }

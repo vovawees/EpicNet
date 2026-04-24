@@ -15,8 +15,19 @@ namespace FishNet.Transporting.EpicNetPlugin
         protected EpicNet _transport;
         protected int _mainThreadId;
         readonly Queue<PendingPacket> _retryQueue = new Queue<PendingPacket>(32);
-        internal const int MAX_RETRY_QUEUE_SIZE = 1024;
-        const int MAX_RETRY_FRAMES = 120;
+
+        protected int _maxRetryQueueSize = 1024;
+        protected int _maxRetryFrames = 120;
+        protected int _maxRetryProcessPerFrame = 32;
+        protected int _maxIncomingPacketsPerFrame = 100;
+
+        internal void SetRetrySettings(int queueSize, int maxFrames, int processPerFrame, int incomingPerFrame)
+        {
+            _maxRetryQueueSize = queueSize;
+            _maxRetryFrames = maxFrames;
+            _maxRetryProcessPerFrame = processPerFrame;
+            _maxIncomingPacketsPerFrame = incomingPerFrame;
+        }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal LocalConnectionState GetLocalConnectionState() => _connectionState;
@@ -84,7 +95,7 @@ namespace FishNet.Transporting.EpicNetPlugin
 
             if (result == Result.LimitExceeded && isReliable)
             {
-                if (_retryQueue.Count >= MAX_RETRY_QUEUE_SIZE)
+                if (_retryQueue.Count >= _maxRetryQueueSize)
                 {
                     Interlocked.Increment(ref _transport.Stats.DroppedPackets);
                     _transport.LogErr("[EpicNet] Retry queue full — dropping reliable packet!");
@@ -118,7 +129,8 @@ namespace FishNet.Transporting.EpicNetPlugin
             var p2p = EOS.GetP2PInterface();
             if (p2p is null) { DrainRetryQueue(); return; }
 
-            for (int i = 0; i < count; i++)
+            int processed = 0;
+            for (int i = 0; i < count && processed < _maxRetryProcessPerFrame; i++)
             {
                 var pending = _retryQueue.Dequeue();
                 bool isReliable = (pending.ChannelId % 2 == 0);
@@ -135,8 +147,9 @@ namespace FishNet.Transporting.EpicNetPlugin
                 };
 
                 var result = p2p.SendPacket(ref sendOptions);
+                processed++;
 
-                if (result == Result.LimitExceeded && pending.RetryCount < MAX_RETRY_FRAMES)
+                if (result == Result.LimitExceeded && pending.RetryCount < _maxRetryFrames)
                 {
                     pending.RetryCount++;
                     _retryQueue.Enqueue(pending);

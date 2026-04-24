@@ -20,7 +20,7 @@ namespace FishNet.Transporting.EpicNetPlugin
         volatile bool _isShuttingDown;
         CancellationTokenSource _authCts;
         bool _isInterrupted;
-        volatile bool _deferredStopRequested; // new flag for safe disconnect
+        volatile bool _deferredStopRequested;
 
         internal void StartConnection()
         {
@@ -124,7 +124,6 @@ namespace FishNet.Transporting.EpicNetPlugin
             return true;
         }
 
-        // Public method for transport to check deferred stop
         internal void CheckDeferredStop()
         {
             if (_deferredStopRequested && GetLocalConnectionState() == LocalConnectionState.Started)
@@ -154,7 +153,6 @@ namespace FishNet.Transporting.EpicNetPlugin
             {
                 if (_isShuttingDown) return;
                 _transport.LogDebug($"[Client] Disconnected: {data.Reason}");
-                // Defer stop to avoid recursive handler removal inside callback
                 _deferredStopRequested = true;
             }
             catch (Exception e) { Debug.LogError($"[Client] OnClosed: {e.Message}"); }
@@ -175,8 +173,10 @@ namespace FishNet.Transporting.EpicNetPlugin
         internal void IterateIncoming()
         {
             if (GetLocalConnectionState() is LocalConnectionState.Stopped or LocalConnectionState.Stopping) return;
-            while (Receive(_localUserId, out _, out var buf, out int len, out byte ch))
+            int processed = 0;
+            while (processed < _maxIncomingPacketsPerFrame && Receive(_localUserId, out _, out var buf, out int len, out byte ch))
             {
+                processed++;
                 var seg = new ArraySegment<byte>(buf, 0, len);
                 _transport.HandleClientReceivedDataArgs(new ClientReceivedDataArgs(seg, (Channel)ch, _transport.Index));
                 ByteArrayPool.Store(buf);
@@ -186,8 +186,10 @@ namespace FishNet.Transporting.EpicNetPlugin
         internal void ReceiveToQueue(ConcurrentQueue<ThreadedPacket> queue)
         {
             if (GetLocalConnectionState() is LocalConnectionState.Stopped or LocalConnectionState.Stopping) return;
-            while (Receive(_localUserId, out _, out var buf, out int len, out byte ch))
+            int processed = 0;
+            while (processed < _maxIncomingPacketsPerFrame && Receive(_localUserId, out _, out var buf, out int len, out byte ch))
             {
+                processed++;
                 queue.Enqueue(new ThreadedPacket { ChannelId = ch, Data = buf, Length = len, ConnectionId = -1 });
             }
         }

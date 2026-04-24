@@ -106,9 +106,9 @@ namespace FishNet.Transporting.EpicNetPlugin
             timeoutCts.Cancel();
 
             if (completedTask != tcs.Task)
-                return Result.TimedOut;
+                return Result.Canceled;
 
-            if (ct.IsCancellationRequested) return Result.TimedOut;
+            if (ct.IsCancellationRequested) return Result.Canceled;
 
             var callbackInfo = await tcs.Task;
 
@@ -153,10 +153,10 @@ namespace FishNet.Transporting.EpicNetPlugin
             timeoutCts.Cancel();
 
             if (completedTask != tcs.Task)
-                return new AuthLoginCallbackInfo { ResultCode = Result.TimedOut };
+                return new AuthLoginCallbackInfo { ResultCode = Result.Canceled };
 
             return ct.IsCancellationRequested
-                ? new AuthLoginCallbackInfo { ResultCode = Result.TimedOut }
+                ? new AuthLoginCallbackInfo { ResultCode = Result.Canceled }
                 : await tcs.Task;
         }
 
@@ -178,9 +178,9 @@ namespace FishNet.Transporting.EpicNetPlugin
             timeoutCts.Cancel();
 
             if (completedTask != tcs.Task)
-                return Result.TimedOut;
+                return Result.Canceled;
 
-            var result = ct.IsCancellationRequested ? Result.TimedOut : (await tcs.Task).ResultCode;
+            var result = ct.IsCancellationRequested ? Result.Canceled : (await tcs.Task).ResultCode;
 
             continuanceToken?.Release();
 
@@ -208,9 +208,9 @@ namespace FishNet.Transporting.EpicNetPlugin
             timeoutCts.Cancel();
 
             if (completedTask != tcs.Task)
-                return Result.TimedOut;
+                return Result.Canceled;
 
-            return ct.IsCancellationRequested ? Result.TimedOut : (await tcs.Task).ResultCode;
+            return ct.IsCancellationRequested ? Result.Canceled : (await tcs.Task).ResultCode;
         }
     }
 }

@@ -39,7 +39,23 @@ namespace FishNet.Transporting.EpicNetPlugin
         [Tooltip("Seconds before a pending connection is dropped.")]
         [SerializeField] float pendingConnectionTimeout = 10f;
 
+        [Tooltip("Burst connection allowance over the per-second limit.")]
+        [SerializeField] int maxBurstConnections = 10;
+
+        [Header("Reliability")]
+        [Tooltip("Maximum size of the retry queue for reliable packets.")]
+        [SerializeField] int maxRetryQueueSize = 1024;
+
+        [Tooltip("Maximum retry attempts for a reliable packet before forcing disconnection.")]
+        [SerializeField] int maxRetryFrames = 120;
+
+        [Tooltip("Maximum retry packets processed per frame.")]
+        [SerializeField] int maxRetryProcessPerFrame = 32;
+
         [Header("Performance")]
+        [Tooltip("Maximum incoming packets processed per frame to avoid frame spikes.")]
+        [SerializeField] int maxIncomingPacketsPerFrame = 100;
+
         [Tooltip("MTU safety margin in bytes.")]
         [Range(0, 100)]
         [SerializeField] int mtuSafetyMargin = 20;
@@ -57,6 +73,7 @@ namespace FishNet.Transporting.EpicNetPlugin
         readonly ServerPeer _server = new ServerPeer();
         readonly ClientPeer _client = new ClientPeer();
         readonly ClientHostPeer _clientHost = new ClientHostPeer();
+        readonly ClientHostBridge _clientHostBridge = new ClientHostBridge();
 
         internal const int CLIENT_HOST_ID = short.MaxValue;
         int _mainThreadId;
@@ -86,11 +103,19 @@ namespace FishNet.Transporting.EpicNetPlugin
         {
             base.Initialize(networkManager, transportIndex);
             _mainThreadId = Thread.CurrentThread.ManagedThreadId;
+
+            _clientHost.Bind(_clientHostBridge);
+            _server.SetClientHostBridge(_clientHostBridge);
+
             _client.Initialize(this);
             _clientHost.Initialize(this);
             _server.Initialize(this);
+
             _server.SetMaximumClients(_maximumClients);
-            _server.SetSecurityLimits(maxConnectionsPerSecond, maxPendingConnections, pendingConnectionTimeout);
+            _server.SetSecurityLimits(maxConnectionsPerSecond, maxPendingConnections, pendingConnectionTimeout, maxBurstConnections);
+
+            _server.SetRetrySettings(maxRetryQueueSize, maxRetryFrames, maxRetryProcessPerFrame, maxIncomingPacketsPerFrame);
+            _client.SetRetrySettings(maxRetryQueueSize, maxRetryFrames, maxRetryProcessPerFrame, maxIncomingPacketsPerFrame);
 
             if (enableThreadedMode)
             {
@@ -105,9 +130,13 @@ namespace FishNet.Transporting.EpicNetPlugin
 
         void Update()
         {
-            _clientHost.PollServerReady();
+            if (!EOS.IsReady())
+            {
+                Shutdown();
+                return;
+            }
 
-            // Handle deferred client stop (from OnClosed)
+            _clientHost.PollServerReady();
             _client.CheckDeferredStop();
 
             if (enableThreadedMode)
@@ -188,7 +217,7 @@ namespace FishNet.Transporting.EpicNetPlugin
             {
                 if (server)
                 {
-                    _server.ProcessClientHostIncoming();
+                    _server.InternalReceiveFromClientHost(new LocalPacket(default(ArraySegment<byte>), 0)); // ensure bridge processed
                     DrainIncomingQueue(_threadedServerIn, true);
                 }
                 else
@@ -391,7 +420,8 @@ namespace FishNet.Transporting.EpicNetPlugin.EditorOnly
     public class EpicNetEditor : Editor
     {
         SerializedProperty _maxClients, _socketName, _remoteUserId, _autoAuth, _authData;
-        SerializedProperty _maxConnPerSec, _maxPending, _pendingTimeout;
+        SerializedProperty _maxConnPerSec, _maxPending, _pendingTimeout, _maxBurst;
+        SerializedProperty _maxRetryQueueSize, _maxRetryFrames, _maxRetryProcessPerFrame, _maxIncomingPacketsPerFrame;
         SerializedProperty _mtuMargin, _threadedMode, _debugLevel, _showStats;
 
         void OnEnable()
@@ -405,6 +435,12 @@ namespace FishNet.Transporting.EpicNetPlugin.EditorOnly
             _maxConnPerSec = serializedObject.FindProperty("maxConnectionsPerSecond");
             _maxPending = serializedObject.FindProperty("maxPendingConnections");
             _pendingTimeout = serializedObject.FindProperty("pendingConnectionTimeout");
+            _maxBurst = serializedObject.FindProperty("maxBurstConnections");
+
+            _maxRetryQueueSize = serializedObject.FindProperty("maxRetryQueueSize");
+            _maxRetryFrames = serializedObject.FindProperty("maxRetryFrames");
+            _maxRetryProcessPerFrame = serializedObject.FindProperty("maxRetryProcessPerFrame");
+            _maxIncomingPacketsPerFrame = serializedObject.FindProperty("maxIncomingPacketsPerFrame");
 
             _mtuMargin = serializedObject.FindProperty("mtuSafetyMargin");
             _threadedMode = serializedObject.FindProperty("enableThreadedMode");
@@ -417,7 +453,7 @@ namespace FishNet.Transporting.EpicNetPlugin.EditorOnly
             serializedObject.Update();
             var t = (EpicNet)target;
 
-            EditorGUILayout.LabelField("EpicNet v0.4.2", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("EpicNet v0.4.5", EditorStyles.boldLabel);
             EditorGUILayout.Space(4);
 
             DrawSection("Connection", () =>
@@ -442,12 +478,21 @@ namespace FishNet.Transporting.EpicNetPlugin.EditorOnly
             DrawSection("Security (DDoS Mitigation)", () =>
             {
                 EditorGUILayout.PropertyField(_maxConnPerSec);
+                EditorGUILayout.PropertyField(_maxBurst);
                 EditorGUILayout.PropertyField(_maxPending);
                 EditorGUILayout.PropertyField(_pendingTimeout);
             });
 
+            DrawSection("Reliability", () =>
+            {
+                EditorGUILayout.PropertyField(_maxRetryQueueSize);
+                EditorGUILayout.PropertyField(_maxRetryFrames);
+                EditorGUILayout.PropertyField(_maxRetryProcessPerFrame);
+            });
+
             DrawSection("Performance", () =>
             {
+                EditorGUILayout.PropertyField(_maxIncomingPacketsPerFrame);
                 EditorGUILayout.PropertyField(_mtuMargin);
                 EditorGUILayout.LabelField("Effective MTU", $"{1170 - _mtuMargin.intValue} bytes");
                 EditorGUILayout.Space(2);
