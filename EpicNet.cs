@@ -107,6 +107,9 @@ namespace FishNet.Transporting.EpicNetPlugin
         {
             _clientHost.PollServerReady();
 
+            // Handle deferred client stop (from OnClosed)
+            _client.CheckDeferredStop();
+
             if (enableThreadedMode)
             {
                 ProcessThreadedSending();
@@ -414,7 +417,7 @@ namespace FishNet.Transporting.EpicNetPlugin.EditorOnly
             serializedObject.Update();
             var t = (EpicNet)target;
 
-            EditorGUILayout.LabelField("EpicNet v0.4.0", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("EpicNet v0.4.2", EditorStyles.boldLabel);
             EditorGUILayout.Space(4);
 
             DrawSection("Connection", () =>

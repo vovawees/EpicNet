@@ -174,7 +174,6 @@ namespace FishNet.Transporting.EpicNetPlugin
             channelId = 0;
 
             if (localUserId is null) return false;
-
             if (!CheckMainThread()) return false;
 
             var p2p = EOS.GetP2PInterface();
@@ -209,14 +208,23 @@ namespace FishNet.Transporting.EpicNetPlugin
             var data = new ArraySegment<byte>(buffer, 0, length);
             var recvOpt = new ReceivePacketOptions { LocalUserId = localUserId, MaxDataSizeBytes = packetSize };
             SocketId sid = default;
-            var recvResult = p2p.ReceivePacket(ref recvOpt, ref remoteUserId, ref sid, out channelId, data, out _);
-
-            if (recvResult != Result.Success)
+            try
             {
+                var recvResult = p2p.ReceivePacket(ref recvOpt, ref remoteUserId, ref sid, out channelId, data, out _);
+                if (recvResult != Result.Success)
+                {
+                    ByteArrayPool.Store(buffer);
+                    buffer = null; length = 0;
+                    _transport.LogErr($"[EpicNet] ReceivePacket: {recvResult}");
+                    return false;
+                }
+            }
+            catch
+            {
+                // Ensure buffer is returned on any exception
                 ByteArrayPool.Store(buffer);
                 buffer = null; length = 0;
-                _transport.LogErr($"[EpicNet] ReceivePacket: {recvResult}");
-                return false;
+                throw;
             }
 
             Interlocked.Increment(ref _transport.Stats.PacketsReceived);

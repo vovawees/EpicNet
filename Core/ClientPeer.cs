@@ -20,6 +20,7 @@ namespace FishNet.Transporting.EpicNetPlugin
         volatile bool _isShuttingDown;
         CancellationTokenSource _authCts;
         bool _isInterrupted;
+        volatile bool _deferredStopRequested; // new flag for safe disconnect
 
         internal void StartConnection()
         {
@@ -30,6 +31,7 @@ namespace FishNet.Transporting.EpicNetPlugin
             }
             _isShuttingDown = false;
             _isInterrupted = false;
+            _deferredStopRequested = false;
             SetLocalConnectionState(LocalConnectionState.Starting, false);
             _authCts = new CancellationTokenSource();
             _ = StartAsync(_authCts.Token);
@@ -122,6 +124,16 @@ namespace FishNet.Transporting.EpicNetPlugin
             return true;
         }
 
+        // Public method for transport to check deferred stop
+        internal void CheckDeferredStop()
+        {
+            if (_deferredStopRequested && GetLocalConnectionState() == LocalConnectionState.Started)
+            {
+                _deferredStopRequested = false;
+                StopConnection();
+            }
+        }
+
         void OnEstablished(ref OnPeerConnectionEstablishedInfo data)
         {
             try
@@ -138,7 +150,13 @@ namespace FishNet.Transporting.EpicNetPlugin
 
         void OnClosed(ref OnRemoteConnectionClosedInfo data)
         {
-            try { if (!_isShuttingDown) { _transport.LogDebug($"[Client] Disconnected: {data.Reason}"); StopConnection(); } }
+            try
+            {
+                if (_isShuttingDown) return;
+                _transport.LogDebug($"[Client] Disconnected: {data.Reason}");
+                // Defer stop to avoid recursive handler removal inside callback
+                _deferredStopRequested = true;
+            }
             catch (Exception e) { Debug.LogError($"[Client] OnClosed: {e.Message}"); }
         }
 

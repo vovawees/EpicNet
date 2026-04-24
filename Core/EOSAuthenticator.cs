@@ -111,6 +111,7 @@ namespace FishNet.Transporting.EpicNetPlugin
 
             if (callbackInfo.ResultCode == Result.InvalidUser && autoCreateAccount)
             {
+                // ContinuanceToken must be manually released; currently EOS does not expose release, but it's safe to proceed.
                 var createResult = await CreateUserAsync(callbackInfo.ContinuanceToken, timeout, ct);
                 return createResult != Result.Success
                     ? createResult

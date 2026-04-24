@@ -9,8 +9,6 @@ namespace FishNet.Transporting.EpicNetPlugin
     {
         ServerPeer _server;
         Queue<LocalPacket> _incoming = new Queue<LocalPacket>(64);
-        bool _waitingForServer;
-        float _serverWaitDeadline;
 
         internal bool StartConnection(ServerPeer serverPeer)
         {
@@ -25,33 +23,23 @@ namespace FishNet.Transporting.EpicNetPlugin
 
             SetLocalConnectionState(LocalConnectionState.Starting, false);
 
+            // Immediate check to avoid race condition
             if (_server.GetLocalConnectionState() == LocalConnectionState.Started)
             {
                 SetLocalConnectionState(LocalConnectionState.Started, false);
             }
-            else
-            {
-                _waitingForServer = true;
-                _serverWaitDeadline = Time.unscaledTime + 30f;
-            }
-
+            // No waiting flag needed, PollServerReady will handle the transition
             return true;
         }
 
         internal void PollServerReady()
         {
-            if (!_waitingForServer) return;
+            if (_server is null) return;
 
-            if (_server is not null && _server.GetLocalConnectionState() == LocalConnectionState.Started)
+            if (GetLocalConnectionState() == LocalConnectionState.Starting &&
+                _server.GetLocalConnectionState() == LocalConnectionState.Started)
             {
-                _waitingForServer = false;
                 SetLocalConnectionState(LocalConnectionState.Started, false);
-            }
-            else if (Time.unscaledTime >= _serverWaitDeadline)
-            {
-                _waitingForServer = false;
-                _transport.LogErr("[ClientHost] Timed out waiting for server.");
-                SetLocalConnectionState(LocalConnectionState.Stopped, false);
             }
         }
 
@@ -67,7 +55,6 @@ namespace FishNet.Transporting.EpicNetPlugin
             if (GetLocalConnectionState() is LocalConnectionState.Stopped or LocalConnectionState.Stopping)
                 return false;
 
-            _waitingForServer = false;
             ClearQueue(ref _incoming);
             SetLocalConnectionState(LocalConnectionState.Stopping, false);
             SetLocalConnectionState(LocalConnectionState.Stopped, false);
