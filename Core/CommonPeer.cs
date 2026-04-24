@@ -44,10 +44,14 @@ namespace FishNet.Transporting.EpicNetPlugin
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        protected void AssertMainThread()
+        protected bool CheckMainThread()
         {
-            Debug.Assert(Thread.CurrentThread.ManagedThreadId == _mainThreadId,
-                "[EpicNet] EOS SDK calls from non-main thread! Disable FishNet Multithreading or enable Threaded Mode.");
+            if (Thread.CurrentThread.ManagedThreadId != _mainThreadId)
+            {
+                _transport.LogErr("[EpicNet] EOS SDK calls from non-main thread! Disable FishNet Multithreading or enable Threaded Mode.");
+                return false;
+            }
+            return true;
         }
 
         internal Result Send(ProductUserId localUserId, ProductUserId remoteUserId, SocketId socketId,
@@ -56,7 +60,8 @@ namespace FishNet.Transporting.EpicNetPlugin
             if (GetLocalConnectionState() != LocalConnectionState.Started)
                 return Result.InvalidState;
 
-            AssertMainThread();
+            if (!CheckMainThread())
+                return Result.InvalidState;
 
             bool isReliable = (channelId % 2 == 0);
             var reliability = isReliable ? PacketReliability.ReliableOrdered : PacketReliability.UnreliableUnordered;
@@ -170,7 +175,7 @@ namespace FishNet.Transporting.EpicNetPlugin
 
             if (localUserId is null) return false;
 
-            AssertMainThread();
+            if (!CheckMainThread()) return false;
 
             var p2p = EOS.GetP2PInterface();
             if (p2p is null) return false;

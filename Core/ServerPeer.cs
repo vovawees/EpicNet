@@ -26,8 +26,8 @@ namespace FishNet.Transporting.EpicNetPlugin
 
         readonly Dictionary<int, Connection> _clientsById = new Dictionary<int, Connection>(64);
         readonly Dictionary<ProductUserId, int> _userToId = new Dictionary<ProductUserId, int>(64);
-        readonly Dictionary<ProductUserId, ulong> _closeHandles = new Dictionary<ProductUserId, ulong>(64);
-        readonly Dictionary<int, ulong> _establishHandles = new Dictionary<int, ulong>(64);
+        ulong? _establishHandle;
+        ulong? _closeHandle;
         readonly HashSet<ProductUserId> _interruptedUsers = new HashSet<ProductUserId>();
 
         readonly Dictionary<ProductUserId, Connection> _pendingConnections = new Dictionary<ProductUserId, Connection>(16);
@@ -98,6 +98,12 @@ namespace FishNet.Transporting.EpicNetPlugin
                 var rOpt = new AddNotifyPeerConnectionRequestOptions { SocketId = _socketId, LocalUserId = _localUserId };
                 _acceptHandle = p2p.AddNotifyPeerConnectionRequest(ref rOpt, null, OnRequest);
 
+                var eOpt = new AddNotifyPeerConnectionEstablishedOptions { SocketId = _socketId, LocalUserId = _localUserId };
+                _establishHandle = p2p.AddNotifyPeerConnectionEstablished(ref eOpt, null, OnEstablished);
+
+                var cOpt = new AddNotifyPeerConnectionClosedOptions { SocketId = _socketId, LocalUserId = _localUserId };
+                _closeHandle = p2p.AddNotifyPeerConnectionClosed(ref cOpt, null, OnClosed);
+
                 var iOpt = new AddNotifyPeerConnectionInterruptedOptions { SocketId = _socketId, LocalUserId = _localUserId };
                 _interruptedHandle = p2p.AddNotifyPeerConnectionInterrupted(ref iOpt, null, OnInterrupted);
 
@@ -155,18 +161,12 @@ namespace FishNet.Transporting.EpicNetPlugin
                 _pendingConnections[data.RemoteUserId] = conn;
                 _pendingTimestamps[data.RemoteUserId] = now;
 
-                var eOpt = new AddNotifyPeerConnectionEstablishedOptions { SocketId = socketId, LocalUserId = data.LocalUserId };
-                var eH = p2p.AddNotifyPeerConnectionEstablished(ref eOpt, conn, OnEstablished);
-                _establishHandles[id] = eH;
-
                 var aOpt = new AcceptConnectionOptions { LocalUserId = _localUserId, RemoteUserId = data.RemoteUserId, SocketId = socketId };
                 var aR = p2p.AcceptConnection(ref aOpt);
                 if (aR != Result.Success)
                 {
-                    _establishHandles.Remove(id);
                     _pendingConnections.Remove(data.RemoteUserId);
                     _pendingTimestamps.Remove(data.RemoteUserId);
-                    p2p.RemoveNotifyPeerConnectionEstablished(eH);
                     _transport.LogErr($"[Server] Accept failed: {data.RemoteUserId} → {aR}");
                     return;
                 }
@@ -181,43 +181,27 @@ namespace FishNet.Transporting.EpicNetPlugin
             try
             {
                 if (_isShuttingDown) return;
-                var conn = (Connection)data.ClientData;
-
-                if (_establishHandles.TryGetValue(conn.Id, out var eH))
-                {
-                    EOS.GetP2PInterface()?.RemoveNotifyPeerConnectionEstablished(eH);
-                    _establishHandles.Remove(conn.Id);
-                }
 
                 if (data.ConnectionType == ConnectionEstablishedType.Reconnection)
                 {
-                    _interruptedUsers.Remove(conn.RemoteUserId);
-                    _transport.LogDebug($"[Server] Reconnected: {conn.RemoteUserId}");
+                    _interruptedUsers.Remove(data.RemoteUserId);
+                    _transport.LogDebug($"[Server] Reconnected: {data.RemoteUserId}");
                     return;
                 }
 
-                _pendingConnections.Remove(conn.RemoteUserId);
-                _pendingTimestamps.Remove(conn.RemoteUserId);
+                if (!_pendingConnections.TryGetValue(data.RemoteUserId, out var conn))
+                    return;
+
+                _pendingConnections.Remove(data.RemoteUserId);
+                _pendingTimestamps.Remove(data.RemoteUserId);
 
                 _clientsById[conn.Id] = conn;
-                _userToId[conn.RemoteUserId] = conn.Id;
+                _userToId[data.RemoteUserId] = conn.Id;
                 _transport.Stats.ActiveConnections = _clientsById.Count;
-
-                var p2p = EOS.GetP2PInterface();
-                if (p2p is not null)
-                {
-                    if (_closeHandles.TryGetValue(conn.RemoteUserId, out var old))
-                    {
-                        p2p.RemoveNotifyPeerConnectionClosed(old);
-                        _closeHandles.Remove(conn.RemoteUserId);
-                    }
-                    var cOpt = new AddNotifyPeerConnectionClosedOptions { SocketId = conn.SocketId, LocalUserId = conn.LocalUserId };
-                    _closeHandles[conn.RemoteUserId] = p2p.AddNotifyPeerConnectionClosed(ref cOpt, conn, OnClosed);
-                }
 
                 _transport.HandleRemoteConnectionState(new RemoteConnectionStateArgs(
                     RemoteConnectionState.Started, conn.Id, _transport.Index));
-                _transport.LogDebug($"[Server] Connected: {conn.RemoteUserId} id={conn.Id}");
+                _transport.LogDebug($"[Server] Connected: {data.RemoteUserId} id={conn.Id}");
             }
             catch (Exception e) { Debug.LogError($"[Server] OnEstablished: {e.Message}"); }
         }
@@ -252,20 +236,13 @@ namespace FishNet.Transporting.EpicNetPlugin
             _clientsById.Remove(conn.Id);
             _userToId.Remove(conn.RemoteUserId);
             _interruptedUsers.Remove(conn.RemoteUserId);
-            if (_closeHandles.TryGetValue(conn.RemoteUserId, out var ch))
-            { EOS.GetP2PInterface()?.RemoveNotifyPeerConnectionClosed(ch); _closeHandles.Remove(conn.RemoteUserId); }
-            if (_establishHandles.TryGetValue(conn.Id, out var eh))
-            { EOS.GetP2PInterface()?.RemoveNotifyPeerConnectionEstablished(eh); _establishHandles.Remove(conn.Id); }
             _transport.Stats.ActiveConnections = _clientsById.Count;
         }
 
         void RemovePending(ProductUserId userId)
         {
-            if (!_pendingConnections.TryGetValue(userId, out var conn)) return;
             _pendingConnections.Remove(userId);
             _pendingTimestamps.Remove(userId);
-            if (_establishHandles.TryGetValue(conn.Id, out var eh))
-            { EOS.GetP2PInterface()?.RemoveNotifyPeerConnectionEstablished(eh); _establishHandles.Remove(conn.Id); }
         }
 
         internal bool StopConnection()
@@ -284,12 +261,12 @@ namespace FishNet.Transporting.EpicNetPlugin
                 foreach (var conn in clientsToStop)
                     _transport.HandleRemoteConnectionState(new RemoteConnectionStateArgs(
                         RemoteConnectionState.Stopped, conn.Id, _transport.Index));
-                foreach (var e in _closeHandles) p2p?.RemoveNotifyPeerConnectionClosed(e.Value);
-                foreach (var e in _establishHandles) p2p?.RemoveNotifyPeerConnectionEstablished(e.Value);
+                if (_closeHandle.HasValue) { p2p?.RemoveNotifyPeerConnectionClosed(_closeHandle.Value); _closeHandle = null; }
+                if (_establishHandle.HasValue) { p2p?.RemoveNotifyPeerConnectionEstablished(_establishHandle.Value); _establishHandle = null; }
                 if (_acceptHandle.HasValue) { p2p?.RemoveNotifyPeerConnectionRequest(_acceptHandle.Value); _acceptHandle = null; }
                 if (_interruptedHandle.HasValue) { p2p?.RemoveNotifyPeerConnectionInterrupted(_interruptedHandle.Value); _interruptedHandle = null; }
-                _clientsById.Clear(); _userToId.Clear(); _closeHandles.Clear();
-                _establishHandles.Clear(); _pendingTimestamps.Clear(); _interruptedUsers.Clear();
+                _clientsById.Clear(); _userToId.Clear();
+                _pendingTimestamps.Clear(); _interruptedUsers.Clear();
                 _pendingConnections.Clear();
                 ClearQueue(ref _clientHostIncoming); _clientHost?.StopConnection(); DrainRetryQueue();
                 if (_localUserId is not null)

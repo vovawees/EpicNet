@@ -97,7 +97,12 @@ namespace FishNet.Transporting.EpicNetPlugin
             connectInterface.Login(ref loginOptions, null,
                 (ref ConnectLoginCallbackInfo data) => tcs.TrySetResult(data));
 
-            if (await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(timeout), ct)) != tcs.Task)
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var delayTask = Task.Delay(TimeSpan.FromSeconds(timeout), timeoutCts.Token);
+            var completedTask = await Task.WhenAny(tcs.Task, delayTask);
+            timeoutCts.Cancel();
+
+            if (completedTask != tcs.Task)
                 return Result.TimedOut;
 
             if (ct.IsCancellationRequested) return Result.TimedOut;
@@ -139,7 +144,12 @@ namespace FishNet.Transporting.EpicNetPlugin
             authInterface.Login(ref loginOptions, null,
                 (ref AuthLoginCallbackInfo data) => tcs.TrySetResult(data));
 
-            if (await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(timeout), ct)) != tcs.Task)
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var delayTask = Task.Delay(TimeSpan.FromSeconds(timeout), timeoutCts.Token);
+            var completedTask = await Task.WhenAny(tcs.Task, delayTask);
+            timeoutCts.Cancel();
+
+            if (completedTask != tcs.Task)
                 return new AuthLoginCallbackInfo { ResultCode = Result.TimedOut };
 
             return ct.IsCancellationRequested
@@ -159,7 +169,12 @@ namespace FishNet.Transporting.EpicNetPlugin
             connectInterface.CreateUser(ref options, null,
                 (ref CreateUserCallbackInfo data) => tcs.TrySetResult(data));
 
-            if (await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(timeout), ct)) != tcs.Task)
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var delayTask = Task.Delay(TimeSpan.FromSeconds(timeout), timeoutCts.Token);
+            var completedTask = await Task.WhenAny(tcs.Task, delayTask);
+            timeoutCts.Cancel();
+
+            if (completedTask != tcs.Task)
                 return Result.TimedOut;
 
             return ct.IsCancellationRequested ? Result.TimedOut : (await tcs.Task).ResultCode;
@@ -180,7 +195,12 @@ namespace FishNet.Transporting.EpicNetPlugin
             connectInterface.CreateDeviceId(ref options, null,
                 (ref CreateDeviceIdCallbackInfo data) => tcs.TrySetResult(data));
 
-            if (await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(timeout), ct)) != tcs.Task)
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var delayTask = Task.Delay(TimeSpan.FromSeconds(timeout), timeoutCts.Token);
+            var completedTask = await Task.WhenAny(tcs.Task, delayTask);
+            timeoutCts.Cancel();
+
+            if (completedTask != tcs.Task)
                 return Result.TimedOut;
 
             return ct.IsCancellationRequested ? Result.TimedOut : (await tcs.Task).ResultCode;
