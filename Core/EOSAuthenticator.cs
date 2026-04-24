@@ -59,7 +59,10 @@ namespace FishNet.Transporting.EpicNetPlugin
             if (copyResult != Result.Success)
                 return copyResult;
 
-            return await ConnectLoginAsync(authToken?.AccessToken, authData.externalCredentialType,
+            string accessToken = authToken?.AccessToken;
+            authToken?.Release();
+
+            return await ConnectLoginAsync(accessToken, authData.externalCredentialType,
                 authData.displayName, authData.automaticallyCreateConnectAccount, authData.timeout, ct);
         }
 
@@ -111,7 +114,6 @@ namespace FishNet.Transporting.EpicNetPlugin
 
             if (callbackInfo.ResultCode == Result.InvalidUser && autoCreateAccount)
             {
-                // ContinuanceToken must be manually released; currently EOS does not expose release, but it's safe to proceed.
                 var createResult = await CreateUserAsync(callbackInfo.ContinuanceToken, timeout, ct);
                 return createResult != Result.Success
                     ? createResult
@@ -178,7 +180,11 @@ namespace FishNet.Transporting.EpicNetPlugin
             if (completedTask != tcs.Task)
                 return Result.TimedOut;
 
-            return ct.IsCancellationRequested ? Result.TimedOut : (await tcs.Task).ResultCode;
+            var result = ct.IsCancellationRequested ? Result.TimedOut : (await tcs.Task).ResultCode;
+
+            continuanceToken?.Release();
+
+            return result;
         }
 
         static async Task<Result> CreateDeviceIdAsync(float timeout, CancellationToken ct)

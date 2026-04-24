@@ -141,7 +141,6 @@ namespace FishNet.Transporting.EpicNetPlugin
                 if (_userToId.ContainsKey(data.RemoteUserId)) { RejectRequest(ref data); return; }
                 if (_pendingConnections.ContainsKey(data.RemoteUserId)) { RejectRequest(ref data); return; }
 
-                // Security: force local socket after name verification
                 if ((data.SocketId?.SocketName ?? _socketId.SocketName) != _socketId.SocketName)
                 {
                     _transport.LogWarn($"[Server] SECURITY: Rejected mismatched SocketId from {data.RemoteUserId}");
@@ -149,12 +148,9 @@ namespace FishNet.Transporting.EpicNetPlugin
                     return;
                 }
 
-                _connectionsThisSecond++;
-
                 var p2p = EOS.GetP2PInterface();
                 if (p2p is null) return;
 
-                // ID assignment before accept to store in pending; worst case we waste an ID (not critical)
                 int id = _nextId++;
                 if (id == EpicNet.CLIENT_HOST_ID) id = _nextId++;
 
@@ -164,15 +160,17 @@ namespace FishNet.Transporting.EpicNetPlugin
 
                 var aOpt = new AcceptConnectionOptions { LocalUserId = _localUserId, RemoteUserId = data.RemoteUserId, SocketId = _socketId };
                 var aR = p2p.AcceptConnection(ref aOpt);
-                if (aR != Result.Success)
+                if (aR == Result.Success)
+                {
+                    _connectionsThisSecond++;
+                    _transport.LogDebug($"[Server] Pending connection: {data.RemoteUserId} id={id}");
+                }
+                else
                 {
                     _pendingConnections.Remove(data.RemoteUserId);
                     _pendingTimestamps.Remove(data.RemoteUserId);
                     _transport.LogErr($"[Server] Accept failed: {data.RemoteUserId} → {aR}");
-                    return;
                 }
-
-                _transport.LogDebug($"[Server] Pending connection: {data.RemoteUserId} id={id}");
             }
             catch (Exception e) { Debug.LogError($"[Server] OnRequest: {e.Message}"); }
         }
@@ -252,23 +250,19 @@ namespace FishNet.Transporting.EpicNetPlugin
             SetLocalConnectionState(LocalConnectionState.Stopping, true);
             try
             {
-                // Cancel auth
                 var oldCts = Interlocked.Exchange(ref _authCts, null);
                 oldCts?.Cancel();
                 oldCts?.Dispose();
 
                 var p2p = EOS.GetP2PInterface();
 
-                // 1. Remove notifications BEFORE raising shutdown flag
                 if (_closeHandle.HasValue) { p2p?.RemoveNotifyPeerConnectionClosed(_closeHandle.Value); _closeHandle = null; }
                 if (_establishHandle.HasValue) { p2p?.RemoveNotifyPeerConnectionEstablished(_establishHandle.Value); _establishHandle = null; }
                 if (_acceptHandle.HasValue) { p2p?.RemoveNotifyPeerConnectionRequest(_acceptHandle.Value); _acceptHandle = null; }
                 if (_interruptedHandle.HasValue) { p2p?.RemoveNotifyPeerConnectionInterrupted(_interruptedHandle.Value); _interruptedHandle = null; }
 
-                // 2. Now safe to mark as shutting down
                 _isShuttingDown = true;
 
-                // Disconnect all clients
                 var clientsToStop = new List<Connection>(_clientsById.Values);
                 foreach (var conn in clientsToStop)
                     _transport.HandleRemoteConnectionState(new RemoteConnectionStateArgs(

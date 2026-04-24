@@ -189,8 +189,7 @@ namespace FishNet.Transporting.EpicNetPlugin
                 return false;
             }
 
-            int maxAllowed = _transport.GetMTU(0) + 40;
-            if (packetSize > (uint)maxAllowed)
+            if (packetSize > P2PInterface.MAX_PACKET_SIZE)
             {
                 var trash = ByteArrayPool.Retrieve((int)packetSize);
                 var trashSeg = new ArraySegment<byte>(trash, 0, (int)packetSize);
@@ -204,13 +203,12 @@ namespace FishNet.Transporting.EpicNetPlugin
             }
 
             buffer = ByteArrayPool.Retrieve((int)packetSize);
-            length = (int)packetSize;
-            var data = new ArraySegment<byte>(buffer, 0, length);
+            var data = new ArraySegment<byte>(buffer, 0, (int)packetSize);
             var recvOpt = new ReceivePacketOptions { LocalUserId = localUserId, MaxDataSizeBytes = packetSize };
             SocketId sid = default;
             try
             {
-                var recvResult = p2p.ReceivePacket(ref recvOpt, ref remoteUserId, ref sid, out channelId, data, out _);
+                var recvResult = p2p.ReceivePacket(ref recvOpt, ref remoteUserId, ref sid, out channelId, data, out var bytesWritten);
                 if (recvResult != Result.Success)
                 {
                     ByteArrayPool.Store(buffer);
@@ -218,10 +216,10 @@ namespace FishNet.Transporting.EpicNetPlugin
                     _transport.LogErr($"[EpicNet] ReceivePacket: {recvResult}");
                     return false;
                 }
+                length = (int)bytesWritten;
             }
             catch
             {
-                // Ensure buffer is returned on any exception
                 ByteArrayPool.Store(buffer);
                 buffer = null; length = 0;
                 throw;
