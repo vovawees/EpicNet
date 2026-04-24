@@ -1,4 +1,3 @@
-
 # EpicNet Transport for FishNet
 
 **EpicNet** is an enterprise-grade, high-performance Peer-to-Peer (P2P) transport plugin bridging [FishNet Networking](https://fish-net.org/) and the [Epic Online Services (EOS) SDK](https://dev.epicgames.com/).
@@ -171,5 +170,3 @@ For questions and contributions: GitHub Issues
 ---
 
 EpicNet – unleashing the full potential of EOS P2P with zero compromises on performance, safety, and clean code.
-
-```
