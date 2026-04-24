@@ -139,7 +139,16 @@ namespace FishNet.Transporting.EpicNetPlugin
                 else
                 {
                     if (result != Result.Success)
+                    {
                         _transport.LogWarn($"[EpicNet] Retry #{pending.RetryCount} failed: {result}");
+                        
+                        if (isReliable)
+                        {
+                            _transport.LogErr($"[EpicNet] CRITICAL: Reliable packet dropped! Disconnecting {pending.RemoteUserId} to prevent state desync.");
+                            var co = new CloseConnectionOptions { SocketId = pending.SocketId, LocalUserId = pending.LocalUserId, RemoteUserId = pending.RemoteUserId };
+                            p2p.CloseConnection(ref co);
+                        }
+                    }
                     pending.ReturnToPool();
                 }
             }

@@ -115,6 +115,12 @@ namespace FishNet.Transporting.EpicNetPlugin
             }
         }
 
+        void RejectRequest(ref OnIncomingConnectionRequestInfo reqData)
+        {
+            var co = new CloseConnectionOptions { SocketId = reqData.SocketId ?? _socketId, LocalUserId = _localUserId, RemoteUserId = reqData.RemoteUserId };
+            EOS.GetP2PInterface()?.CloseConnection(ref co);
+        }
+
         void OnRequest(ref OnIncomingConnectionRequestInfo data)
         {
             try
@@ -123,16 +129,17 @@ namespace FishNet.Transporting.EpicNetPlugin
 
                 float now = Time.unscaledTime;
                 if (now - _lastRateLimitReset > 1f) { _connectionsThisSecond = 0; _lastRateLimitReset = now; }
-                if (_connectionsThisSecond >= _maxConnPerSec) return;
-                if (_clientsById.Count + _pendingConnections.Count >= _maximumClients) return;
-                if (_pendingConnections.Count >= _maxPending) return;
-                if (_userToId.ContainsKey(data.RemoteUserId)) return;
-                if (_pendingConnections.ContainsKey(data.RemoteUserId)) return;
+                if (_connectionsThisSecond >= _maxConnPerSec) { RejectRequest(ref data); return; }
+                if (_clientsById.Count + _pendingConnections.Count >= _maximumClients) { RejectRequest(ref data); return; }
+                if (_pendingConnections.Count >= _maxPending) { RejectRequest(ref data); return; }
+                if (_userToId.ContainsKey(data.RemoteUserId)) { RejectRequest(ref data); return; }
+                if (_pendingConnections.ContainsKey(data.RemoteUserId)) { RejectRequest(ref data); return; }
 
                 var socketId = data.SocketId ?? _socketId;
                 if (socketId.SocketName != _socketId.SocketName)
                 {
                     _transport.LogWarn($"[Server] SECURITY: Rejected mismatched SocketId from {data.RemoteUserId}");
+                    RejectRequest(ref data);
                     return;
                 }
 
@@ -273,9 +280,10 @@ namespace FishNet.Transporting.EpicNetPlugin
                 oldCts?.Dispose();
 
                 var p2p = EOS.GetP2PInterface();
-                foreach (var kvp in _clientsById)
+                var clientsToStop = new List<Connection>(_clientsById.Values);
+                foreach (var conn in clientsToStop)
                     _transport.HandleRemoteConnectionState(new RemoteConnectionStateArgs(
-                        RemoteConnectionState.Stopped, kvp.Value.Id, _transport.Index));
+                        RemoteConnectionState.Stopped, conn.Id, _transport.Index));
                 foreach (var e in _closeHandles) p2p?.RemoveNotifyPeerConnectionClosed(e.Value);
                 foreach (var e in _establishHandles) p2p?.RemoveNotifyPeerConnectionEstablished(e.Value);
                 if (_acceptHandle.HasValue) { p2p?.RemoveNotifyPeerConnectionRequest(_acceptHandle.Value); _acceptHandle = null; }
