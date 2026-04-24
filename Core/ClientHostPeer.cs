@@ -1,15 +1,16 @@
 using System;
 using System.Collections.Generic;
-using System.Threading.Tasks;
 using FishNet.Utility.Performance;
 using UnityEngine;
 
 namespace FishNet.Transporting.EpicNetPlugin
 {
-    public sealed class ClientHostPeer : CommonPeer
+    internal sealed class ClientHostPeer : CommonPeer
     {
         ServerPeer _server;
         Queue<LocalPacket> _incoming = new Queue<LocalPacket>(64);
+        bool _waitingForServer;
+        float _serverWaitDeadline;
 
         internal bool StartConnection(ServerPeer serverPeer)
         {
@@ -23,23 +24,35 @@ namespace FishNet.Transporting.EpicNetPlugin
                 return false;
 
             SetLocalConnectionState(LocalConnectionState.Starting, false);
-            _ = WaitForServerAsync();
+
+            if (_server.GetLocalConnectionState() == LocalConnectionState.Started)
+            {
+                SetLocalConnectionState(LocalConnectionState.Started, false);
+            }
+            else
+            {
+                _waitingForServer = true;
+                _serverWaitDeadline = Time.unscaledTime + 30f;
+            }
+
             return true;
         }
 
-        async Task WaitForServerAsync()
+        internal void PollServerReady()
         {
-            float deadline = Time.unscaledTime + 30f;
-            while (Time.unscaledTime < deadline)
+            if (!_waitingForServer) return;
+
+            if (_server is not null && _server.GetLocalConnectionState() == LocalConnectionState.Started)
             {
-                if (_server.GetLocalConnectionState() == LocalConnectionState.Started)
-                {
-                    SetLocalConnectionState(LocalConnectionState.Started, false);
-                    return;
-                }
-                await Task.Yield();
+                _waitingForServer = false;
+                SetLocalConnectionState(LocalConnectionState.Started, false);
             }
-            SetLocalConnectionState(LocalConnectionState.Stopped, false);
+            else if (Time.unscaledTime >= _serverWaitDeadline)
+            {
+                _waitingForServer = false;
+                _transport.LogErr("[ClientHost] Timed out waiting for server.");
+                SetLocalConnectionState(LocalConnectionState.Stopped, false);
+            }
         }
 
         protected override void SetLocalConnectionState(LocalConnectionState connectionState, bool server)
@@ -54,6 +67,7 @@ namespace FishNet.Transporting.EpicNetPlugin
             if (GetLocalConnectionState() is LocalConnectionState.Stopped or LocalConnectionState.Stopping)
                 return false;
 
+            _waitingForServer = false;
             ClearQueue(ref _incoming);
             SetLocalConnectionState(LocalConnectionState.Stopping, false);
             SetLocalConnectionState(LocalConnectionState.Stopped, false);

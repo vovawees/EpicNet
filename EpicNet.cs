@@ -29,6 +29,16 @@ namespace FishNet.Transporting.EpicNetPlugin
         [Tooltip("Auth Connect Data.")]
         [SerializeField] AuthData authConnectData = new AuthData();
 
+        [Header("Security")]
+        [Tooltip("Maximum connection requests accepted per second to prevent DDoS.")]
+        [SerializeField] int maxConnectionsPerSecond = 50;
+
+        [Tooltip("Maximum simultaneous pending connections before dropping new requests.")]
+        [SerializeField] int maxPendingConnections = 256;
+
+        [Tooltip("Seconds before a pending connection is dropped.")]
+        [SerializeField] float pendingConnectionTimeout = 10f;
+
         [Header("Performance")]
         [Tooltip("MTU safety margin in bytes.")]
         [Range(0, 100)]
@@ -56,7 +66,7 @@ namespace FishNet.Transporting.EpicNetPlugin
         ConcurrentQueue<ThreadedPacket> _threadedServerIn;
         ConcurrentQueue<ThreadedPacket> _threadedClientIn;
 
-        public EpicNetStatistics Stats;
+        public EpicNetStatistics Stats = new EpicNetStatistics();
         public bool AutoAuthenticate => autoAuthenticate;
         public AuthData AuthConnectData => authConnectData;
         public string SocketName { get => socketName; set => socketName = value; }
@@ -80,6 +90,7 @@ namespace FishNet.Transporting.EpicNetPlugin
             _clientHost.Initialize(this);
             _server.Initialize(this);
             _server.SetMaximumClients(_maximumClients);
+            _server.SetSecurityLimits(maxConnectionsPerSecond, maxPendingConnections, pendingConnectionTimeout);
 
             if (enableThreadedMode)
             {
@@ -94,15 +105,21 @@ namespace FishNet.Transporting.EpicNetPlugin
 
         void Update()
         {
-            if (!enableThreadedMode) return;
+            _clientHost.PollServerReady();
 
-            ProcessThreadedSending();
-            ProcessThreadedReceiving();
+            if (enableThreadedMode)
+            {
+                ProcessThreadedSending();
+                ProcessThreadedReceiving();
 
-            if (_server.GetLocalConnectionState() == LocalConnectionState.Started)
-                _server.ProcessRetryQueue();
-            if (_client.GetLocalConnectionState() == LocalConnectionState.Started)
-                _client.ProcessRetryQueue();
+                if (_server.GetLocalConnectionState() == LocalConnectionState.Started)
+                {
+                    _server.ProcessRetryQueue();
+                    _server.CleanupPendingConnections();
+                }
+                if (_client.GetLocalConnectionState() == LocalConnectionState.Started)
+                    _client.ProcessRetryQueue();
+            }
 
             if (showStats) Stats.Calculate();
         }
@@ -121,8 +138,10 @@ namespace FishNet.Transporting.EpicNetPlugin
             while (_threadedClientOut.TryDequeue(out var pkt))
             {
                 var seg = new ArraySegment<byte>(pkt.Data, 0, pkt.Length);
-                _client.SendToServer(pkt.ChannelId, seg);
-                _clientHost.SendToServer(pkt.ChannelId, seg);
+                if (_clientHost.GetLocalConnectionState() == LocalConnectionState.Started)
+                    _clientHost.SendToServer(pkt.ChannelId, seg);
+                else
+                    _client.SendToServer(pkt.ChannelId, seg);
                 Interlocked.Increment(ref Stats.PacketsSent);
                 Interlocked.Add(ref Stats.BytesSent, pkt.Length);
                 pkt.ReturnToPool();
@@ -132,10 +151,10 @@ namespace FishNet.Transporting.EpicNetPlugin
         void ProcessThreadedReceiving()
         {
             if (_server.GetLocalConnectionState() == LocalConnectionState.Started)
-                _server.ReceiveToQueue(_threadedServerIn, ref Stats);
+                _server.ReceiveToQueue(_threadedServerIn);
 
             if (_client.GetLocalConnectionState() == LocalConnectionState.Started)
-                _client.ReceiveToQueue(_threadedClientIn, ref Stats);
+                _client.ReceiveToQueue(_threadedClientIn);
         }
 
         public override string GetConnectionAddress(int connectionId) =>
@@ -229,8 +248,10 @@ namespace FishNet.Transporting.EpicNetPlugin
             }
             else
             {
-                _client.SendToServer(channelId, segment);
-                _clientHost.SendToServer(channelId, segment);
+                if (_clientHost.GetLocalConnectionState() == LocalConnectionState.Started)
+                    _clientHost.SendToServer(channelId, segment);
+                else
+                    _client.SendToServer(channelId, segment);
                 Interlocked.Increment(ref Stats.PacketsSent);
                 Interlocked.Add(ref Stats.BytesSent, segment.Count);
             }
@@ -266,6 +287,7 @@ namespace FishNet.Transporting.EpicNetPlugin
             StopConnection(false);
             StopConnection(true);
             DrainAllQueues();
+            Stats.Reset();
         }
 
         void DrainAllQueues()
@@ -366,6 +388,7 @@ namespace FishNet.Transporting.EpicNetPlugin.EditorOnly
     public class EpicNetEditor : Editor
     {
         SerializedProperty _maxClients, _socketName, _remoteUserId, _autoAuth, _authData;
+        SerializedProperty _maxConnPerSec, _maxPending, _pendingTimeout;
         SerializedProperty _mtuMargin, _threadedMode, _debugLevel, _showStats;
 
         void OnEnable()
@@ -375,6 +398,11 @@ namespace FishNet.Transporting.EpicNetPlugin.EditorOnly
             _remoteUserId = serializedObject.FindProperty("remoteServerProductUserId");
             _autoAuth = serializedObject.FindProperty("autoAuthenticate");
             _authData = serializedObject.FindProperty("authConnectData");
+
+            _maxConnPerSec = serializedObject.FindProperty("maxConnectionsPerSecond");
+            _maxPending = serializedObject.FindProperty("maxPendingConnections");
+            _pendingTimeout = serializedObject.FindProperty("pendingConnectionTimeout");
+
             _mtuMargin = serializedObject.FindProperty("mtuSafetyMargin");
             _threadedMode = serializedObject.FindProperty("enableThreadedMode");
             _debugLevel = serializedObject.FindProperty("debugLevel");
@@ -386,7 +414,7 @@ namespace FishNet.Transporting.EpicNetPlugin.EditorOnly
             serializedObject.Update();
             var t = (EpicNet)target;
 
-            EditorGUILayout.LabelField("EpicNet v0.3.0", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("EpicNet v0.4.0", EditorStyles.boldLabel);
             EditorGUILayout.Space(4);
 
             DrawSection("Connection", () =>
@@ -406,6 +434,13 @@ namespace FishNet.Transporting.EpicNetPlugin.EditorOnly
                 EditorGUILayout.PropertyField(_autoAuth);
                 if (_autoAuth.boolValue)
                     EditorGUILayout.PropertyField(_authData, true);
+            });
+
+            DrawSection("Security (DDoS Mitigation)", () =>
+            {
+                EditorGUILayout.PropertyField(_maxConnPerSec);
+                EditorGUILayout.PropertyField(_maxPending);
+                EditorGUILayout.PropertyField(_pendingTimeout);
             });
 
             DrawSection("Performance", () =>

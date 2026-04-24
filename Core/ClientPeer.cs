@@ -9,7 +9,7 @@ using UnityEngine;
 
 namespace FishNet.Transporting.EpicNetPlugin
 {
-    public sealed class ClientPeer : CommonPeer
+    internal sealed class ClientPeer : CommonPeer
     {
         SocketId _socketId;
         ProductUserId _localUserId;
@@ -45,7 +45,11 @@ namespace FishNet.Transporting.EpicNetPlugin
                     if (r != Result.Success)
                     { _transport.LogErr($"[Client] Auth failed: {r}"); SetLocalConnectionState(LocalConnectionState.Stopped, false); return; }
                 }
-                if (ct.IsCancellationRequested) return;
+                if (ct.IsCancellationRequested)
+                {
+                    SetLocalConnectionState(LocalConnectionState.Stopped, false);
+                    return;
+                }
 
                 _localUserId = EOS.LocalProductUserId;
                 _remoteUserId = ProductUserId.FromString(_transport.RemoteProductUserId);
@@ -77,8 +81,15 @@ namespace FishNet.Transporting.EpicNetPlugin
                 p2p.QueryNATType(ref nOpt, null, (ref OnQueryNATTypeCompleteInfo d) =>
                     _transport.LogDebug($"[Client] NAT: {d.NATType}"));
             }
-            catch (OperationCanceledException) { }
-            catch (Exception e) { _transport.LogErr($"[Client] Start failed: {e.Message}"); SetLocalConnectionState(LocalConnectionState.Stopped, false); }
+            catch (OperationCanceledException)
+            {
+                SetLocalConnectionState(LocalConnectionState.Stopped, false);
+            }
+            catch (Exception e)
+            {
+                _transport.LogErr($"[Client] Start failed: {e.Message}");
+                SetLocalConnectionState(LocalConnectionState.Stopped, false);
+            }
         }
 
         void CleanupHandles()
@@ -95,7 +106,11 @@ namespace FishNet.Transporting.EpicNetPlugin
             if (GetLocalConnectionState() is LocalConnectionState.Stopped or LocalConnectionState.Stopping) return false;
             _isShuttingDown = true;
             SetLocalConnectionState(LocalConnectionState.Stopping, false);
-            _authCts?.Cancel(); _authCts?.Dispose(); _authCts = null;
+
+            var oldCts = Interlocked.Exchange(ref _authCts, null);
+            oldCts?.Cancel();
+            oldCts?.Dispose();
+
             CleanupHandles();
             DrainRetryQueue();
             if (_localUserId is not null && _remoteUserId is not null)
@@ -142,23 +157,19 @@ namespace FishNet.Transporting.EpicNetPlugin
         internal void IterateIncoming()
         {
             if (GetLocalConnectionState() is LocalConnectionState.Stopped or LocalConnectionState.Stopping) return;
-            ulong count = GetIncomingPacketQueueCurrentPacketCount();
-            for (ulong i = 0; i < count; i++)
+            while (Receive(_localUserId, out _, out var buf, out int len, out byte ch))
             {
-                if (!Receive(_localUserId, out _, out var buf, out int len, out byte ch)) continue;
                 var seg = new ArraySegment<byte>(buf, 0, len);
                 _transport.HandleClientReceivedDataArgs(new ClientReceivedDataArgs(seg, (Channel)ch, _transport.Index));
                 ByteArrayPool.Store(buf);
             }
         }
 
-        internal void ReceiveToQueue(ConcurrentQueue<ThreadedPacket> queue, ref EpicNetStatistics stats)
+        internal void ReceiveToQueue(ConcurrentQueue<ThreadedPacket> queue)
         {
             if (GetLocalConnectionState() is LocalConnectionState.Stopped or LocalConnectionState.Stopping) return;
-            ulong count = GetIncomingPacketQueueCurrentPacketCount();
-            for (ulong i = 0; i < count; i++)
+            while (Receive(_localUserId, out _, out var buf, out int len, out byte ch))
             {
-                if (!Receive(_localUserId, out _, out var buf, out int len, out byte ch)) continue;
                 queue.Enqueue(new ThreadedPacket { ChannelId = ch, Data = buf, Length = len, ConnectionId = -1 });
             }
         }

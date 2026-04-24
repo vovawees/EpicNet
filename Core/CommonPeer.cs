@@ -1,23 +1,21 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using Epic.OnlineServices;
 using Epic.OnlineServices.P2P;
-using FishNet.Managing;
 using FishNet.Utility.Performance;
 using UnityEngine;
 
 namespace FishNet.Transporting.EpicNetPlugin
 {
-    public abstract class CommonPeer
+    internal abstract class CommonPeer
     {
         LocalConnectionState _connectionState = LocalConnectionState.Stopped;
         protected EpicNet _transport;
         protected int _mainThreadId;
         readonly Queue<PendingPacket> _retryQueue = new Queue<PendingPacket>(32);
-        internal const int MAX_RETRY_QUEUE_SIZE = 512;
+        internal const int MAX_RETRY_QUEUE_SIZE = 1024;
         const int MAX_RETRY_FRAMES = 120;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -161,6 +159,8 @@ namespace FishNet.Transporting.EpicNetPlugin
             length = 0;
             channelId = 0;
 
+            if (localUserId is null) return false;
+
             AssertMainThread();
 
             var p2p = EOS.GetP2PInterface();
@@ -208,15 +208,6 @@ namespace FishNet.Transporting.EpicNetPlugin
             Interlocked.Increment(ref _transport.Stats.PacketsReceived);
             Interlocked.Add(ref _transport.Stats.BytesReceived, length);
             return true;
-        }
-
-        protected ulong GetIncomingPacketQueueCurrentPacketCount()
-        {
-            var p2p = EOS.GetP2PInterface();
-            if (p2p is null) return 0;
-            var opt = new GetPacketQueueInfoOptions();
-            var result = p2p.GetPacketQueueInfo(ref opt, out var info);
-            return result == Result.Success ? info.IncomingPacketQueueCurrentPacketCount : 0;
         }
     }
 }

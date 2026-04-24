@@ -10,9 +10,9 @@ using UnityEngine;
 
 namespace FishNet.Transporting.EpicNetPlugin
 {
-    public sealed class ServerPeer : CommonPeer
+    internal sealed class ServerPeer : CommonPeer
     {
-        static int _nextId = 1;
+        int _nextId = 1;
 
         SocketId _socketId;
         ProductUserId _localUserId;
@@ -28,19 +28,32 @@ namespace FishNet.Transporting.EpicNetPlugin
         readonly Dictionary<ProductUserId, int> _userToId = new Dictionary<ProductUserId, int>(64);
         readonly Dictionary<ProductUserId, ulong> _closeHandles = new Dictionary<ProductUserId, ulong>(64);
         readonly Dictionary<int, ulong> _establishHandles = new Dictionary<int, ulong>(64);
-        readonly Dictionary<ProductUserId, float> _pendingTimestamps = new Dictionary<ProductUserId, float>(16);
         readonly HashSet<ProductUserId> _interruptedUsers = new HashSet<ProductUserId>();
+
+        readonly Dictionary<ProductUserId, Connection> _pendingConnections = new Dictionary<ProductUserId, Connection>(16);
+        readonly Dictionary<ProductUserId, float> _pendingTimestamps = new Dictionary<ProductUserId, float>(16);
+        readonly List<ProductUserId> _expiredCache = new List<ProductUserId>(8);
 
         int _maximumClients = short.MaxValue;
         int _connectionsThisSecond;
         float _lastRateLimitReset;
-        const int MAX_CONN_PER_SEC = 10;
-        const float PENDING_TIMEOUT = 10f;
+
+        int _maxConnPerSec = 50;
+        int _maxPending = 256;
+        float _pendingTimeout = 10f;
+
+        internal void SetSecurityLimits(int maxConnPerSec, int maxPending, float timeout)
+        {
+            _maxConnPerSec = maxConnPerSec;
+            _maxPending = maxPending;
+            _pendingTimeout = timeout;
+        }
 
         internal bool StartConnection()
         {
             if (GetLocalConnectionState() != LocalConnectionState.Stopped) return false;
             _isShuttingDown = false;
+            _nextId = 1;
             SetLocalConnectionState(LocalConnectionState.Starting, true);
             _authCts = new CancellationTokenSource();
             _ = AuthAndListen(_authCts.Token);
@@ -61,7 +74,11 @@ namespace FishNet.Transporting.EpicNetPlugin
                         return;
                     }
                 }
-                if (ct.IsCancellationRequested) return;
+                if (ct.IsCancellationRequested)
+                {
+                    SetLocalConnectionState(LocalConnectionState.Stopped, true);
+                    return;
+                }
 
                 _localUserId = EOS.LocalProductUserId;
                 _socketId = new SocketId { SocketName = _transport.SocketName };
@@ -87,7 +104,10 @@ namespace FishNet.Transporting.EpicNetPlugin
                 _transport.LogDebug("[Server] Started listening");
                 SetLocalConnectionState(LocalConnectionState.Started, true);
             }
-            catch (OperationCanceledException) { }
+            catch (OperationCanceledException)
+            {
+                SetLocalConnectionState(LocalConnectionState.Stopped, true);
+            }
             catch (Exception e)
             {
                 _transport.LogErr($"[Server] Start failed: {e.Message}");
@@ -100,18 +120,32 @@ namespace FishNet.Transporting.EpicNetPlugin
             try
             {
                 if (_isShuttingDown) return;
+
                 float now = Time.unscaledTime;
                 if (now - _lastRateLimitReset > 1f) { _connectionsThisSecond = 0; _lastRateLimitReset = now; }
-                if (_connectionsThisSecond >= MAX_CONN_PER_SEC || _clientsById.Count >= _maximumClients) return;
+                if (_connectionsThisSecond >= _maxConnPerSec) return;
+                if (_clientsById.Count + _pendingConnections.Count >= _maximumClients) return;
+                if (_pendingConnections.Count >= _maxPending) return;
                 if (_userToId.ContainsKey(data.RemoteUserId)) return;
+                if (_pendingConnections.ContainsKey(data.RemoteUserId)) return;
+
+                var socketId = data.SocketId ?? _socketId;
+                if (socketId.SocketName != _socketId.SocketName)
+                {
+                    _transport.LogWarn($"[Server] SECURITY: Rejected mismatched SocketId from {data.RemoteUserId}");
+                    return;
+                }
+
                 _connectionsThisSecond++;
 
                 var p2p = EOS.GetP2PInterface();
                 if (p2p is null) return;
 
                 int id = _nextId++;
-                var socketId = data.SocketId ?? _socketId;
+                if (id == EpicNet.CLIENT_HOST_ID) id = _nextId++;
+
                 var conn = new Connection(id, data.LocalUserId, data.RemoteUserId, socketId);
+                _pendingConnections[data.RemoteUserId] = conn;
                 _pendingTimestamps[data.RemoteUserId] = now;
 
                 var eOpt = new AddNotifyPeerConnectionEstablishedOptions { SocketId = socketId, LocalUserId = data.LocalUserId };
@@ -123,14 +157,14 @@ namespace FishNet.Transporting.EpicNetPlugin
                 if (aR != Result.Success)
                 {
                     _establishHandles.Remove(id);
+                    _pendingConnections.Remove(data.RemoteUserId);
                     _pendingTimestamps.Remove(data.RemoteUserId);
                     p2p.RemoveNotifyPeerConnectionEstablished(eH);
                     _transport.LogErr($"[Server] Accept failed: {data.RemoteUserId} → {aR}");
                     return;
                 }
-                _clientsById[id] = conn;
-                _userToId[data.RemoteUserId] = id;
-                _transport.Stats.ActiveConnections = _clientsById.Count;
+
+                _transport.LogDebug($"[Server] Pending connection: {data.RemoteUserId} id={id}");
             }
             catch (Exception e) { Debug.LogError($"[Server] OnRequest: {e.Message}"); }
         }
@@ -141,7 +175,6 @@ namespace FishNet.Transporting.EpicNetPlugin
             {
                 if (_isShuttingDown) return;
                 var conn = (Connection)data.ClientData;
-                _pendingTimestamps.Remove(conn.RemoteUserId);
 
                 if (_establishHandles.TryGetValue(conn.Id, out var eH))
                 {
@@ -155,6 +188,13 @@ namespace FishNet.Transporting.EpicNetPlugin
                     _transport.LogDebug($"[Server] Reconnected: {conn.RemoteUserId}");
                     return;
                 }
+
+                _pendingConnections.Remove(conn.RemoteUserId);
+                _pendingTimestamps.Remove(conn.RemoteUserId);
+
+                _clientsById[conn.Id] = conn;
+                _userToId[conn.RemoteUserId] = conn.Id;
+                _transport.Stats.ActiveConnections = _clientsById.Count;
 
                 var p2p = EOS.GetP2PInterface();
                 if (p2p is not null)
@@ -205,12 +245,20 @@ namespace FishNet.Transporting.EpicNetPlugin
             _clientsById.Remove(conn.Id);
             _userToId.Remove(conn.RemoteUserId);
             _interruptedUsers.Remove(conn.RemoteUserId);
-            _pendingTimestamps.Remove(conn.RemoteUserId);
             if (_closeHandles.TryGetValue(conn.RemoteUserId, out var ch))
             { EOS.GetP2PInterface()?.RemoveNotifyPeerConnectionClosed(ch); _closeHandles.Remove(conn.RemoteUserId); }
             if (_establishHandles.TryGetValue(conn.Id, out var eh))
             { EOS.GetP2PInterface()?.RemoveNotifyPeerConnectionEstablished(eh); _establishHandles.Remove(conn.Id); }
             _transport.Stats.ActiveConnections = _clientsById.Count;
+        }
+
+        void RemovePending(ProductUserId userId)
+        {
+            if (!_pendingConnections.TryGetValue(userId, out var conn)) return;
+            _pendingConnections.Remove(userId);
+            _pendingTimestamps.Remove(userId);
+            if (_establishHandles.TryGetValue(conn.Id, out var eh))
+            { EOS.GetP2PInterface()?.RemoveNotifyPeerConnectionEstablished(eh); _establishHandles.Remove(conn.Id); }
         }
 
         internal bool StopConnection()
@@ -220,7 +268,10 @@ namespace FishNet.Transporting.EpicNetPlugin
             SetLocalConnectionState(LocalConnectionState.Stopping, true);
             try
             {
-                _authCts?.Cancel(); _authCts?.Dispose(); _authCts = null;
+                var oldCts = Interlocked.Exchange(ref _authCts, null);
+                oldCts?.Cancel();
+                oldCts?.Dispose();
+
                 var p2p = EOS.GetP2PInterface();
                 foreach (var kvp in _clientsById)
                     _transport.HandleRemoteConnectionState(new RemoteConnectionStateArgs(
@@ -231,6 +282,7 @@ namespace FishNet.Transporting.EpicNetPlugin
                 if (_interruptedHandle.HasValue) { p2p?.RemoveNotifyPeerConnectionInterrupted(_interruptedHandle.Value); _interruptedHandle = null; }
                 _clientsById.Clear(); _userToId.Clear(); _closeHandles.Clear();
                 _establishHandles.Clear(); _pendingTimestamps.Clear(); _interruptedUsers.Clear();
+                _pendingConnections.Clear();
                 ClearQueue(ref _clientHostIncoming); _clientHost?.StopConnection(); DrainRetryQueue();
                 if (_localUserId is not null)
                 { var co = new CloseConnectionsOptions { SocketId = _socketId, LocalUserId = _localUserId }; p2p?.CloseConnections(ref co); }
@@ -261,28 +313,34 @@ namespace FishNet.Transporting.EpicNetPlugin
         {
             if (GetLocalConnectionState() != LocalConnectionState.Started) return;
             ProcessRetryQueue();
-            CleanupPending();
+            CleanupPendingConnections();
         }
 
-        void CleanupPending()
+        internal void CleanupPendingConnections()
         {
             if (_pendingTimestamps.Count == 0) return;
             float now = Time.unscaledTime;
-            List<ProductUserId> expired = null;
+            _expiredCache.Clear();
             foreach (var e in _pendingTimestamps)
-                if (now - e.Value > PENDING_TIMEOUT)
-                    (expired ??= new List<ProductUserId>(4)).Add(e.Key);
-            if (expired is null) return;
-            foreach (var uid in expired)
+                if (now - e.Value > _pendingTimeout)
+                    _expiredCache.Add(e.Key);
+            if (_expiredCache.Count == 0) return;
+            var p2p = EOS.GetP2PInterface();
+            foreach (var uid in _expiredCache)
             {
-                _pendingTimestamps.Remove(uid);
-                if (_userToId.TryGetValue(uid, out int id) && _clientsById.TryGetValue(id, out var c))
-                { RemoveClient(c); _transport.LogWarn($"[Server] Pending timeout: {uid}"); }
+                if (_pendingConnections.TryGetValue(uid, out var conn) && p2p is not null)
+                {
+                    var co = new CloseConnectionOptions { SocketId = conn.SocketId, LocalUserId = conn.LocalUserId, RemoteUserId = conn.RemoteUserId };
+                    p2p.CloseConnection(ref co);
+                }
+                RemovePending(uid);
+                _transport.LogWarn($"[Server] Pending timeout: {uid}");
             }
         }
 
         internal void ProcessClientHostIncoming()
         {
+            if (_clientHost is null) return;
             while (_clientHostIncoming.Count > 0)
             {
                 var pkt = _clientHostIncoming.Dequeue();
@@ -297,10 +355,8 @@ namespace FishNet.Transporting.EpicNetPlugin
         {
             if (GetLocalConnectionState() != LocalConnectionState.Started) return;
             ProcessClientHostIncoming();
-            ulong count = GetIncomingPacketQueueCurrentPacketCount();
-            for (ulong i = 0; i < count; i++)
+            while (Receive(_localUserId, out var remoteUserId, out var buf, out int len, out byte ch))
             {
-                if (!Receive(_localUserId, out var remoteUserId, out var buf, out int len, out byte ch)) continue;
                 var seg = new ArraySegment<byte>(buf, 0, len);
                 if (!_userToId.TryGetValue(remoteUserId, out int connId))
                 { ByteArrayPool.Store(buf); continue; }
@@ -310,14 +366,12 @@ namespace FishNet.Transporting.EpicNetPlugin
             }
         }
 
-        internal void ReceiveToQueue(ConcurrentQueue<ThreadedPacket> queue, ref EpicNetStatistics stats)
+        internal void ReceiveToQueue(ConcurrentQueue<ThreadedPacket> queue)
         {
             if (GetLocalConnectionState() != LocalConnectionState.Started) return;
             ProcessClientHostIncoming();
-            ulong count = GetIncomingPacketQueueCurrentPacketCount();
-            for (ulong i = 0; i < count; i++)
+            while (Receive(_localUserId, out var remoteUserId, out var buf, out int len, out byte ch))
             {
-                if (!Receive(_localUserId, out var remoteUserId, out var buf, out int len, out byte ch)) continue;
                 if (!_userToId.TryGetValue(remoteUserId, out int connId))
                 { ByteArrayPool.Store(buf); continue; }
                 queue.Enqueue(new ThreadedPacket { ChannelId = ch, Data = buf, Length = len, ConnectionId = connId });

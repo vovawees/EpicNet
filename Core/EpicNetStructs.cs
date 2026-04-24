@@ -1,7 +1,5 @@
 using System;
-using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
-using System.Threading;
 using Epic.OnlineServices;
 using Epic.OnlineServices.Auth;
 using Epic.OnlineServices.Connect;
@@ -58,7 +56,7 @@ namespace FishNet.Transporting.EpicNetPlugin
         }
     }
 
-    public readonly struct Connection
+    internal readonly struct Connection
     {
         public readonly int Id;
         public readonly ProductUserId LocalUserId;
@@ -133,7 +131,7 @@ namespace FishNet.Transporting.EpicNetPlugin
     public enum EpicNetDebugLevel : byte { None = 0, Errors = 1, Warnings = 2, Verbose = 3 }
 
     [Serializable]
-    public struct EpicNetStatistics
+    public sealed class EpicNetStatistics
     {
         public long PacketsSent;
         public long PacketsReceived;
@@ -145,9 +143,9 @@ namespace FishNet.Transporting.EpicNetPlugin
         public float SendRate;
         public float ReceiveRate;
 
-        internal long _lastSent;
-        internal long _lastReceived;
-        internal float _lastCalcTime;
+        long _lastSent;
+        long _lastReceived;
+        float _lastCalcTime;
 
         public void Calculate()
         {
@@ -159,6 +157,15 @@ namespace FishNet.Transporting.EpicNetPlugin
             _lastSent = PacketsSent;
             _lastReceived = PacketsReceived;
             _lastCalcTime = now;
+        }
+
+        public void Reset()
+        {
+            PacketsSent = 0; PacketsReceived = 0;
+            BytesSent = 0; BytesReceived = 0;
+            RetryQueueSize = 0; ActiveConnections = 0;
+            DroppedPackets = 0; SendRate = 0; ReceiveRate = 0;
+            _lastSent = 0; _lastReceived = 0; _lastCalcTime = 0;
         }
     }
 }

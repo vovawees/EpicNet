@@ -16,8 +16,6 @@ namespace FishNet.Transporting.EpicNetPlugin
 {
     internal static class EOSAuthenticator
     {
-        const int MAX_AUTH_RETRIES = 2;
-
         internal static async Task<Result> Authenticate(AuthData authData, CancellationToken ct)
         {
             if (authData is null) return Result.InvalidParameters;
@@ -177,7 +175,7 @@ namespace FishNet.Transporting.EpicNetPlugin
 
             var options = new CreateDeviceIdOptions
             {
-                DeviceModel = $"{SystemInfo.deviceModel} {SystemInfo.deviceName} {SystemInfo.deviceType}"
+                DeviceModel = $"{SystemInfo.deviceType}"
             };
             connectInterface.CreateDeviceId(ref options, null,
                 (ref CreateDeviceIdCallbackInfo data) => tcs.TrySetResult(data));

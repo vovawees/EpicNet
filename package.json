@@ -1,9 +1,9 @@
 {
   "name": "com.vovawe.epicnet",
   "displayName": "EpicNet",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "unity": "6000.0",
-  "description": "High-Performance EOS P2P Transport for FishNet 4.7.2. Optimized and Modernized by vovawe.",
+  "description": "High-Performance EOS P2P Transport for FishNet 4.7.2+. By vovawe.",
   "author": {
     "name": "vovawe"
   },
