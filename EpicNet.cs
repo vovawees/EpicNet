@@ -13,54 +13,126 @@ namespace FishNet.Transporting.EpicNetPlugin
     public sealed class EpicNet : Transport
     {
         [Header("Connection")]
+        [Tooltip("Maximum number of simultaneously connected players.")]
+        [Range(1, 65535)]
         [SerializeField] int _maximumClients = 4095;
+
+        [Tooltip("Shared identifier for the P2P socket. Must be identical on server and all clients.")]
         [SerializeField] string socketName = "EpicNet";
+
+        [Tooltip("Server's EOS ProductUserId. Required for clients to connect.")]
         [SerializeField] string remoteServerProductUserId;
+
+        [Space(5)]
+        [Header("Authentication")]
+        [Tooltip("Enable automatic EOS login when the transport starts.")]
         [SerializeField] bool autoAuthenticate = true;
+
+        [Tooltip("Credentials, token, timeout, and account creation options.")]
         [SerializeField] AuthData authConnectData = new AuthData();
 
+        [Space(5)]
         [Header("Security")]
+        [Tooltip("Maximum new connections allowed per second.")]
+        [Range(1, 1000)]
         [SerializeField] int maxConnectionsPerSecond = 50;
+
+        [Tooltip("Additional connections allowed above the per-second limit during bursts.")]
+        [Range(0, 100)]
         [SerializeField] int maxBurstConnections = 10;
+
+        [Tooltip("Maximum unconfirmed connections before new requests are rejected.")]
+        [Range(1, 10000)]
         [SerializeField] int maxPendingConnections = 256;
+
+        [Tooltip("Time in seconds before a pending connection is dropped if not established.")]
+        [Range(1f, 120f)]
         [SerializeField] float pendingConnectionTimeout = 10f;
 
+        [Space(5)]
         [Header("Reliability")]
+        [Tooltip("Maximum number of reliable packets waiting for resend.")]
+        [Range(1, 100000)]
         [SerializeField] int maxRetryQueueSize = 1024;
+
+        [Tooltip("Maximum retry attempts per packet before forcing disconnection.")]
+        [Range(1, 1000)]
         [SerializeField] int maxRetryFrames = 120;
+
+        [Tooltip("How many retry packets are processed per frame.")]
+        [Range(1, 500)]
         [SerializeField] int maxRetryProcessPerFrame = 32;
 
+        [Space(5)]
         [Header("Lobbies")]
+        [Tooltip("Enable EOS lobby creation. The server will advertise itself publicly.")]
         [SerializeField] bool enableLobbies = false;
+
+        [Tooltip("Name of the lobby. Used if lobbies are enabled.")]
         [SerializeField] string lobbyName = "EpicNetGame";
 
+        [Space(5)]
         [Header("Auto-Reconnect")]
+        [Tooltip("Enable automatic reconnection on connection interruptions.")]
         [SerializeField] bool autoReconnect = true;
+
+        [Tooltip("Maximum reconnection attempts before giving up.")]
+        [Range(1, 100)]
         [SerializeField] int maxReconnectAttempts = 5;
+
+        [Tooltip("Base delay in seconds before the first reconnection attempt.")]
+        [Range(0.1f, 10f)]
         [SerializeField] float reconnectDelayBase = 1f;
+
+        [Tooltip("Maximum delay in seconds between reconnection attempts.")]
+        [Range(1f, 120f)]
         [SerializeField] float reconnectDelayMax = 30f;
 
+        [Space(5)]
         [Header("Keep-Alive")]
+        [Tooltip("Enable keep-alive checks. Idle clients will be disconnected after timeout.")]
         [SerializeField] bool enableKeepAlive = false;
+
+        [Tooltip("Interval in seconds between keep-alive checks.")]
+        [Range(0.1f, 60f)]
         [SerializeField] float keepAliveInterval = 2f;
+
+        [Tooltip("Time in seconds without any packet before a client is considered timed out.")]
+        [Range(1f, 300f)]
         [SerializeField] float keepAliveTimeout = 10f;
 
+        [Space(5)]
         [Header("Relay")]
+        [Tooltip("Relay policy: NoRelays = direct only, AllowRelays = try direct then relay, ForceRelays = always relay.")]
         [SerializeField] RelayPolicy relayPolicy = RelayPolicy.AllowRelays;
-        public enum RelayPolicy { NoRelays, AllowRelays, ForceRelays }
 
+        public enum RelayPolicy { NoRelays, AllowRelays, ForceRelays }
         public RelayPolicy RelayPolicyValue => relayPolicy;
 
+        [Space(5)]
         [Header("Performance")]
+        [Tooltip("Maximum number of incoming packets processed per frame. Increase for high-load servers.")]
+        [Range(1, 10000)]
         [SerializeField] int maxIncomingPacketsPerFrame = 100;
+
+        [Tooltip("Effective MTU becomes P2P interface max size minus this safety margin.")]
+        [Range(0, 500)]
         [SerializeField] int mtuSafetyMargin = 20;
+
+        [Tooltip("Enable lock-free queueing for FishNet's multithreaded transport.")]
         [SerializeField] bool enableThreadedMode;
 
+        [Space(5)]
         [Header("LAN Discovery")]
+        [Tooltip("Enable LAN server discovery via UDP broadcast.")]
         [SerializeField] bool enableLanDiscovery = false;
 
+        [Space(10)]
         [Header("Debug")]
+        [Tooltip("Controls the verbosity of log messages.")]
         [SerializeField] EpicNetDebugLevel debugLevel = EpicNetDebugLevel.Errors;
+
+        [Tooltip("Display real-time network statistics in the Inspector during Play Mode.")]
         [SerializeField] bool showStats;
 
         readonly ServerPeer _server = new ServerPeer();
@@ -202,13 +274,9 @@ namespace FishNet.Transporting.EpicNetPlugin
             if (enableThreadedMode)
             {
                 if (server)
-                {
                     DrainIncomingQueue(_threadedServerIn, true);
-                }
                 else
-                {
                     DrainIncomingQueue(_threadedClientIn, false);
-                }
             }
             else
             {
