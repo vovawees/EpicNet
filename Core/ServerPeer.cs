@@ -518,6 +518,7 @@ namespace FishNet.Transporting.EpicNetPlugin
                         _lastKeepAlive[connId] = Time.unscaledTime;
                 }
                 queue.Enqueue(new ThreadedPacket(ch, new ArraySegment<byte>(buf, 0, len), connId));
+                ByteArrayPool.Store(buf);
             }
         }
 
@@ -533,7 +534,6 @@ namespace FishNet.Transporting.EpicNetPlugin
             lock (_lock)
             {
                 if (!_clientsById.TryGetValue(connectionId, out conn)) return;
-                if (_interruptedUsers.Contains(conn.RemoteUserId)) return;
             }
             SendWithPriority(_localUserId, conn.RemoteUserId, _socketId, channelId, segment, priority);
         }

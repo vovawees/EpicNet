@@ -130,7 +130,6 @@ namespace FishNet.Transporting.EpicNetPlugin
 
             _retryList.Clear();
             while (_retryQueue.Count > 0) _retryList.Add(_retryQueue.Dequeue());
-            _retryList.Sort((a, b) => b.Priority.CompareTo(a.Priority));
 
             int processed = 0;
             for (int i = 0; i < _retryList.Count; i++)

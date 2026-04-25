@@ -254,6 +254,7 @@ namespace FishNet.Transporting.EpicNetPlugin
             {
                 processed++;
                 queue.Enqueue(new ThreadedPacket(ch, new ArraySegment<byte>(buf, 0, len), -1));
+                ByteArrayPool.Store(buf);
             }
         }
 
