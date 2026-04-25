@@ -95,7 +95,9 @@ namespace FishNet.Transporting.EpicNetPlugin
                 if (_retryQueue.Count >= _maxRetryQueueSize)
                 {
                     Interlocked.Increment(ref _transport.Stats.DroppedPackets);
-                    _transport.LogErr("[EpicNet] Retry queue full — dropping reliable packet!");
+                    _transport.LogErr("[EpicNet] Retry queue full — dropping reliable packet! Disconnecting remote peer.");
+                    var co = new CloseConnectionOptions { SocketId = socketId, LocalUserId = localUserId, RemoteUserId = remoteUserId };
+                    p2p.CloseConnection(ref co);
                     return;
                 }
 
@@ -108,8 +110,10 @@ namespace FishNet.Transporting.EpicNetPlugin
                     Data = buf, Length = segment.Count, RetryCount = 0,
                     Priority = priority
                 });
+                return;
             }
-            else if (result != Result.Success)
+
+            if (result != Result.Success)
                 _transport.LogWarn($"[EpicNet] Send failed → {remoteUserId} size={segment.Count} err={result}");
         }
 
@@ -124,7 +128,7 @@ namespace FishNet.Transporting.EpicNetPlugin
 
             var sorted = new List<PendingPacket>(count);
             while (_retryQueue.Count > 0) sorted.Add(_retryQueue.Dequeue());
-            sorted.Sort((a, b) => b.Priority.CompareTo(a.Priority)); 
+            sorted.Sort((a, b) => b.Priority.CompareTo(a.Priority));
 
             int processed = 0;
             for (int i = 0; i < sorted.Count && processed < _maxRetryProcessPerFrame; i++)
@@ -166,6 +170,7 @@ namespace FishNet.Transporting.EpicNetPlugin
                     sorted[i] = default;
                 }
             }
+
             for (int i = processed; i < sorted.Count; i++)
             {
                 if (sorted[i].Data != null)
@@ -191,12 +196,14 @@ namespace FishNet.Transporting.EpicNetPlugin
 
             var getSizeOpt = new GetNextReceivedPacketSizeOptions { LocalUserId = localUserId };
             var sizeResult = p2p.GetNextReceivedPacketSize(ref getSizeOpt, out var packetSize);
+
             if (sizeResult == Result.NotFound) return false;
             if (sizeResult != Result.Success)
             {
                 _transport.LogErr($"[EpicNet] GetNextReceivedPacketSize: {sizeResult}");
                 return false;
             }
+
             if (packetSize > P2PInterface.MAX_PACKET_SIZE)
             {
                 var trash = ByteArrayPool.Retrieve((int)packetSize);

@@ -1,6 +1,5 @@
 using System.Collections.Generic;
 using FishNet.Utility.Performance;
-using UnityEngine;
 
 namespace FishNet.Transporting.EpicNetPlugin
 {
@@ -10,8 +9,9 @@ namespace FishNet.Transporting.EpicNetPlugin
         ClientHostPeer _clientHost;
         Queue<LocalPacket> _serverToClient = new Queue<LocalPacket>(64);
         Queue<LocalPacket> _clientToServer = new Queue<LocalPacket>(64);
-        bool _serverStarted;
-        bool _clientHostStarted;
+
+        internal bool _serverStarted;
+        internal bool _clientHostStarted;
 
         internal void Bind(ServerPeer server, ClientHostPeer clientHost)
         {
@@ -22,20 +22,13 @@ namespace FishNet.Transporting.EpicNetPlugin
         internal void OnServerState(LocalConnectionState state)
         {
             _serverStarted = state == LocalConnectionState.Started;
-            if (_serverStarted && _clientHostStarted) return;
-            if (state == LocalConnectionState.Stopped)
-            {
-                ClearQueues();
-            }
+            if (state == LocalConnectionState.Stopped) ClearQueues();
         }
 
         internal void OnClientHostState(LocalConnectionState state)
         {
             _clientHostStarted = state == LocalConnectionState.Started;
-            if (state == LocalConnectionState.Stopped)
-            {
-                ClearQueues();
-            }
+            if (state == LocalConnectionState.Stopped) ClearQueues();
         }
 
         internal void ServerSendToClient(LocalPacket packet)

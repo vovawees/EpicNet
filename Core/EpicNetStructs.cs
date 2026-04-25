@@ -50,13 +50,6 @@ namespace FishNet.Transporting.EpicNetPlugin
         Low = 2
     }
 
-    public enum RelayControl : byte
-    {
-        NoRelays = 0,
-        AllowRelays = 1,
-        ForceRelays = 2
-    }
-
     internal readonly struct LocalPacket
     {
         public readonly byte[] Data;
