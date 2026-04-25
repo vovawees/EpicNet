@@ -114,21 +114,28 @@ namespace FishNet.Transporting.EpicNetPlugin
                 var p2p = EOS.GetP2PInterface();
                 if (p2p is null) { SetLocalConnectionState(LocalConnectionState.Stopped, true); return; }
 
-                p2p.SetRelayControl(new SetRelayControlOptions { RelayControl = (RelayControl)_transport.RelayPolicy });
+                p2p.SetRelayControl(new SetRelayControlOptions { RelayControl = (RelayControl)_transport.RelayPolicyValue });
 
                 var qOpt = new SetPacketQueueSizeOptions
                 { IncomingPacketQueueMaxSizeBytes = 4 * 1024 * 1024, OutgoingPacketQueueMaxSizeBytes = 4 * 1024 * 1024 };
                 p2p.SetPacketQueueSize(ref qOpt);
 
-                _acceptHandle = p2p.AddNotifyPeerConnectionRequest(new AddNotifyPeerConnectionRequestOptions { SocketId = _socketId, LocalUserId = _localUserId }, null, OnRequest);
-                _establishHandle = p2p.AddNotifyPeerConnectionEstablished(new AddNotifyPeerConnectionEstablishedOptions { SocketId = _socketId, LocalUserId = _localUserId }, null, OnEstablished);
-                _closeHandle = p2p.AddNotifyPeerConnectionClosed(new AddNotifyPeerConnectionClosedOptions { SocketId = _socketId, LocalUserId = _localUserId }, null, OnClosed);
-                _interruptedHandle = p2p.AddNotifyPeerConnectionInterrupted(new AddNotifyPeerConnectionInterruptedOptions { SocketId = _socketId, LocalUserId = _localUserId }, null, OnInterrupted);
+                var acceptOptions = new AddNotifyPeerConnectionRequestOptions { SocketId = _socketId, LocalUserId = _localUserId };
+                _acceptHandle = p2p.AddNotifyPeerConnectionRequest(ref acceptOptions, null, OnRequest);
+
+                var establishOptions = new AddNotifyPeerConnectionEstablishedOptions { SocketId = _socketId, LocalUserId = _localUserId };
+                _establishHandle = p2p.AddNotifyPeerConnectionEstablished(ref establishOptions, null, OnEstablished);
+
+                var closeOptions = new AddNotifyPeerConnectionClosedOptions { SocketId = _socketId, LocalUserId = _localUserId };
+                _closeHandle = p2p.AddNotifyPeerConnectionClosed(ref closeOptions, null, OnClosed);
+
+                var interruptedOptions = new AddNotifyPeerConnectionInterruptedOptions { SocketId = _socketId, LocalUserId = _localUserId };
+                _interruptedHandle = p2p.AddNotifyPeerConnectionInterrupted(ref interruptedOptions, null, OnInterrupted);
 
                 if (_enableLobbies)
                 {
                     _lobby = EOS.GetLobbyInterface();
-                    var createOpt = new CreateLobbyOptions { LocalUserId = _localUserId, MaxLobbyMembers = (uint)_maximumClients, PresencePermission = LobbyPermissionLevel.Publicadvertised };
+                    var createOpt = new CreateLobbyOptions { LocalUserId = _localUserId, MaxLobbyMembers = (uint)_maximumClients };
                     _lobby.CreateLobby(ref createOpt, null, (ref CreateLobbyCallbackInfo info) =>
                     {
                         if (info.ResultCode != Result.Success)

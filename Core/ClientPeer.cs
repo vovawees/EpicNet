@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using System.Collections.Concurrent;
 using Epic.OnlineServices;
 using Epic.OnlineServices.P2P;
+using FishNet.Utility.Performance;
 using UnityEngine;
 
 namespace FishNet.Transporting.EpicNetPlugin
@@ -86,13 +87,18 @@ namespace FishNet.Transporting.EpicNetPlugin
                 var p2p = EOS.GetP2PInterface();
                 if (p2p is null) { SetLocalConnectionState(LocalConnectionState.Stopped, false); return; }
 
-                p2p.SetRelayControl(new SetRelayControlOptions { RelayControl = (RelayControl)_transport.RelayPolicy });
+                p2p.SetRelayControl(new SetRelayControlOptions { RelayControl = (RelayControl)_transport.RelayPolicyValue });
 
                 CleanupHandles();
 
-                _establishedHandle = p2p.AddNotifyPeerConnectionEstablished(new AddNotifyPeerConnectionEstablishedOptions { LocalUserId = _localUserId, SocketId = _socketId }, null, OnEstablished);
-                _closedHandle = p2p.AddNotifyPeerConnectionClosed(new AddNotifyPeerConnectionClosedOptions { LocalUserId = _localUserId, SocketId = _socketId }, null, OnClosed);
-                _interruptedHandle = p2p.AddNotifyPeerConnectionInterrupted(new AddNotifyPeerConnectionInterruptedOptions { LocalUserId = _localUserId, SocketId = _socketId }, null, OnInterrupted);
+                var establishedOptions = new AddNotifyPeerConnectionEstablishedOptions { LocalUserId = _localUserId, SocketId = _socketId };
+                _establishedHandle = p2p.AddNotifyPeerConnectionEstablished(ref establishedOptions, null, OnEstablished);
+
+                var closedOptions = new AddNotifyPeerConnectionClosedOptions { LocalUserId = _localUserId, SocketId = _socketId };
+                _closedHandle = p2p.AddNotifyPeerConnectionClosed(ref closedOptions, null, OnClosed);
+
+                var interruptedOptions = new AddNotifyPeerConnectionInterruptedOptions { LocalUserId = _localUserId, SocketId = _socketId };
+                _interruptedHandle = p2p.AddNotifyPeerConnectionInterrupted(ref interruptedOptions, null, OnInterrupted);
 
                 var aOpt = new AcceptConnectionOptions { LocalUserId = _localUserId, RemoteUserId = _remoteUserId, SocketId = _socketId };
                 var aR = p2p.AcceptConnection(ref aOpt);

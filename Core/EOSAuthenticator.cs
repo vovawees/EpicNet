@@ -60,7 +60,6 @@ namespace FishNet.Transporting.EpicNetPlugin
                 return copyResult;
 
             string accessToken = authToken?.AccessToken;
-            authToken?.Release();
 
             return await ConnectLoginAsync(accessToken, authData.externalCredentialType,
                 authData.displayName, authData.automaticallyCreateConnectAccount, authData.timeout, ct);
@@ -181,8 +180,6 @@ namespace FishNet.Transporting.EpicNetPlugin
                 return Result.Canceled;
 
             var result = ct.IsCancellationRequested ? Result.Canceled : (await tcs.Task).ResultCode;
-
-            continuanceToken?.Release();
 
             return result;
         }
