@@ -52,6 +52,31 @@ namespace FishNet.Transporting.EpicNetPlugin
         [Tooltip("Maximum retry packets processed per frame.")]
         [SerializeField] int maxRetryProcessPerFrame = 32;
 
+        [Header("Lobbies")]
+        [SerializeField] bool enableLobbies = false;
+        [SerializeField] string lobbyName = "EpicNetGame";
+
+        [Header("Auto-Reconnect")]
+        [SerializeField] bool autoReconnect = true;
+        [SerializeField] int maxReconnectAttempts = 5;
+        [SerializeField] float reconnectDelayBase = 1f;
+        [SerializeField] float reconnectDelayMax = 30f;
+
+        [Header("Keep-Alive")]
+        [SerializeField] bool enableKeepAlive = false;
+        [SerializeField] float keepAliveInterval = 2f;
+        [SerializeField] float keepAliveTimeout = 10f;
+
+        [Header("Voice")]
+        [SerializeField] bool enableVoice = false;
+
+        [Header("Relay")]
+        [SerializeField] EpicNetRelayControl relayPolicy = EpicNetRelayControl.AllowRelays;
+        public enum EpicNetRelayControl { NoRelays, AllowRelays, ForceRelays }
+
+        [Header("Channel Priorities")]
+        [SerializeField] ChannelSettings[] channelSettings = new ChannelSettings[0];
+
         [Header("Performance")]
         [Tooltip("Maximum incoming packets processed per frame to avoid frame spikes.")]
         [SerializeField] int maxIncomingPacketsPerFrame = 100;
@@ -62,6 +87,9 @@ namespace FishNet.Transporting.EpicNetPlugin
 
         [Tooltip("Enable thread-safe mode for FishNet Multithreading support.")]
         [SerializeField] bool enableThreadedMode;
+
+        [Header("LAN Discovery")]
+        [SerializeField] bool enableLanDiscovery = false;
 
         [Header("Debug")]
         [Tooltip("Debug logging level.")]
@@ -89,6 +117,8 @@ namespace FishNet.Transporting.EpicNetPlugin
         public string SocketName { get => socketName; set => socketName = value; }
         public bool IsThreadedMode => enableThreadedMode;
         public EpicNetDebugLevel DebugLevel => debugLevel;
+        public EpicNetRelayControl RelayPolicy => relayPolicy;
+        public bool EnableLobbies => enableLobbies;
 
         public string LocalProductUserId =>
             EOS.GetPlatformInterface()?.GetConnectInterface()?.GetLoggedInUserByIndex(0)?.ToString() ?? string.Empty;
@@ -113,9 +143,13 @@ namespace FishNet.Transporting.EpicNetPlugin
 
             _server.SetMaximumClients(_maximumClients);
             _server.SetSecurityLimits(maxConnectionsPerSecond, maxPendingConnections, pendingConnectionTimeout, maxBurstConnections);
+            _server.SetLobbySettings(enableLobbies, lobbyName);
+            _server.SetKeepAlive(enableKeepAlive, keepAliveInterval, keepAliveTimeout);
+            _server.SetLanDiscovery(enableLanDiscovery);
 
             _server.SetRetrySettings(maxRetryQueueSize, maxRetryFrames, maxRetryProcessPerFrame, maxIncomingPacketsPerFrame);
             _client.SetRetrySettings(maxRetryQueueSize, maxRetryFrames, maxRetryProcessPerFrame, maxIncomingPacketsPerFrame);
+            _client.SetReconnectSettings(autoReconnect, maxReconnectAttempts, reconnectDelayBase, reconnectDelayMax);
 
             if (enableThreadedMode)
             {
@@ -217,7 +251,7 @@ namespace FishNet.Transporting.EpicNetPlugin
             {
                 if (server)
                 {
-                    _server.InternalReceiveFromClientHost(new LocalPacket(default(ArraySegment<byte>), 0)); // ensure bridge processed
+                    _server.InternalReceiveFromClientHost(new LocalPacket(default(ArraySegment<byte>), 0)); 
                     DrainIncomingQueue(_threadedServerIn, true);
                 }
                 else
@@ -423,6 +457,10 @@ namespace FishNet.Transporting.EpicNetPlugin.EditorOnly
         SerializedProperty _maxConnPerSec, _maxPending, _pendingTimeout, _maxBurst;
         SerializedProperty _maxRetryQueueSize, _maxRetryFrames, _maxRetryProcessPerFrame, _maxIncomingPacketsPerFrame;
         SerializedProperty _mtuMargin, _threadedMode, _debugLevel, _showStats;
+        SerializedProperty _enableLobbies, _lobbyName;
+        SerializedProperty _autoReconnect, _maxReconnectAttempts, _reconnectDelayBase, _reconnectDelayMax;
+        SerializedProperty _enableKeepAlive, _keepAliveInterval, _keepAliveTimeout;
+        SerializedProperty _enableVoice, _relayPolicy, _channelSettings, _enableLanDiscovery;
 
         void OnEnable()
         {
@@ -446,6 +484,23 @@ namespace FishNet.Transporting.EpicNetPlugin.EditorOnly
             _threadedMode = serializedObject.FindProperty("enableThreadedMode");
             _debugLevel = serializedObject.FindProperty("debugLevel");
             _showStats = serializedObject.FindProperty("showStats");
+
+            _enableLobbies = serializedObject.FindProperty("enableLobbies");
+            _lobbyName = serializedObject.FindProperty("lobbyName");
+
+            _autoReconnect = serializedObject.FindProperty("autoReconnect");
+            _maxReconnectAttempts = serializedObject.FindProperty("maxReconnectAttempts");
+            _reconnectDelayBase = serializedObject.FindProperty("reconnectDelayBase");
+            _reconnectDelayMax = serializedObject.FindProperty("reconnectDelayMax");
+
+            _enableKeepAlive = serializedObject.FindProperty("enableKeepAlive");
+            _keepAliveInterval = serializedObject.FindProperty("keepAliveInterval");
+            _keepAliveTimeout = serializedObject.FindProperty("keepAliveTimeout");
+
+            _enableVoice = serializedObject.FindProperty("enableVoice");
+            _relayPolicy = serializedObject.FindProperty("relayPolicy");
+            _channelSettings = serializedObject.FindProperty("channelSettings");
+            _enableLanDiscovery = serializedObject.FindProperty("enableLanDiscovery");
         }
 
         public override void OnInspectorGUI()
@@ -488,6 +543,42 @@ namespace FishNet.Transporting.EpicNetPlugin.EditorOnly
                 EditorGUILayout.PropertyField(_maxRetryQueueSize);
                 EditorGUILayout.PropertyField(_maxRetryFrames);
                 EditorGUILayout.PropertyField(_maxRetryProcessPerFrame);
+            });
+
+            DrawSection("Lobbies", () =>
+            {
+                EditorGUILayout.PropertyField(_enableLobbies);
+                if (_enableLobbies.boolValue)
+                    EditorGUILayout.PropertyField(_lobbyName);
+            });
+
+            DrawSection("Auto-Reconnect", () =>
+            {
+                EditorGUILayout.PropertyField(_autoReconnect);
+                if (_autoReconnect.boolValue)
+                {
+                    EditorGUILayout.PropertyField(_maxReconnectAttempts);
+                    EditorGUILayout.PropertyField(_reconnectDelayBase);
+                    EditorGUILayout.PropertyField(_reconnectDelayMax);
+                }
+            });
+
+            DrawSection("Keep-Alive", () =>
+            {
+                EditorGUILayout.PropertyField(_enableKeepAlive);
+                if (_enableKeepAlive.boolValue)
+                {
+                    EditorGUILayout.PropertyField(_keepAliveInterval);
+                    EditorGUILayout.PropertyField(_keepAliveTimeout);
+                }
+            });
+
+            DrawSection("Advanced Features", () =>
+            {
+                EditorGUILayout.PropertyField(_enableVoice);
+                EditorGUILayout.PropertyField(_relayPolicy);
+                EditorGUILayout.PropertyField(_channelSettings);
+                EditorGUILayout.PropertyField(_enableLanDiscovery);
             });
 
             DrawSection("Performance", () =>

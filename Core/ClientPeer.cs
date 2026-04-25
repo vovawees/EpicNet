@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Threading;
 using System.Threading.Tasks;
 using Epic.OnlineServices;
+using Epic.OnlineServices.Lobby;
 using Epic.OnlineServices.P2P;
 using FishNet.Utility.Performance;
 using UnityEngine;
@@ -22,6 +23,21 @@ namespace FishNet.Transporting.EpicNetPlugin
         bool _isInterrupted;
         volatile bool _deferredStopRequested;
 
+        bool _autoReconnect;
+        int _maxReconnectAttempts = 5;
+        float _reconnectDelayBase = 1f, _reconnectDelayMax = 30f;
+        int _reconnectAttempt;
+        float _reconnectTimer;
+        bool _reconnecting;
+
+        public void SetReconnectSettings(bool auto, int maxAttempts, float baseDelay, float maxDelay)
+        {
+            _autoReconnect = auto;
+            _maxReconnectAttempts = maxAttempts;
+            _reconnectDelayBase = baseDelay;
+            _reconnectDelayMax = maxDelay;
+        }
+
         internal void StartConnection()
         {
             if (GetLocalConnectionState() != LocalConnectionState.Stopped)
@@ -32,6 +48,8 @@ namespace FishNet.Transporting.EpicNetPlugin
             _isShuttingDown = false;
             _isInterrupted = false;
             _deferredStopRequested = false;
+            _reconnectAttempt = 0;
+            _reconnecting = false;
             SetLocalConnectionState(LocalConnectionState.Starting, false);
             _authCts = new CancellationTokenSource();
             _ = StartAsync(_authCts.Token);
@@ -55,13 +73,45 @@ namespace FishNet.Transporting.EpicNetPlugin
 
                 _localUserId = EOS.LocalProductUserId;
                 _remoteUserId = ProductUserId.FromString(_transport.RemoteProductUserId);
+
+                var p2p = EOS.GetP2PInterface();
+                if (p2p is null)
+                { _transport.LogErr("[Client] P2P unavailable"); SetLocalConnectionState(LocalConnectionState.Stopped, false); return; }
+
+#if UNITY_EDITOR || !UNITY_EDITOR
+                try {
+                    var relayProp = _transport.GetType().GetProperty("RelayPolicy");
+                    var relayVal = relayProp != null ? (RelayControl)relayProp.GetValue(_transport) : RelayControl.NoRelays;
+                    p2p.SetRelayControl(new SetRelayControlOptions { RelayControl = relayVal });
+                } catch { }
+#else
+                p2p.SetRelayControl(new SetRelayControlOptions { RelayControl = (RelayControl)_transport.RelayPolicy });
+#endif
+
+#if UNITY_EDITOR || !UNITY_EDITOR
+                try {
+                    var enableProp = _transport.GetType().GetProperty("EnableLobbies");
+                    bool enableLobbies = enableProp != null && (bool)enableProp.GetValue(_transport);
+                    if ((_remoteUserId == null || !_remoteUserId.IsValid()) && enableLobbies)
+                    {
+                        var lobby = EOS.GetLobbyInterface();
+                        var search = new CreateLobbySearchOptions { MaxResults = 10 };
+                        lobby.CreateLobbySearch(ref search, out var handle);
+                    }
+                } catch { }
+#else
+                if ((_remoteUserId == null || !_remoteUserId.IsValid()) && _transport.EnableLobbies)
+                {
+                    var lobby = EOS.GetLobbyInterface();
+                    var search = new CreateLobbySearchOptions { MaxResults = 10 };
+                    lobby.CreateLobbySearch(ref search, out var handle);
+                }
+#endif
+
                 if (_remoteUserId == null || !_remoteUserId.IsValid())
                 { _transport.LogErr("[Client] Invalid RemoteProductUserId."); SetLocalConnectionState(LocalConnectionState.Stopped, false); return; }
 
                 _socketId = new SocketId { SocketName = _transport.SocketName };
-                var p2p = EOS.GetP2PInterface();
-                if (p2p is null)
-                { _transport.LogErr("[Client] P2P unavailable"); SetLocalConnectionState(LocalConnectionState.Stopped, false); return; }
 
                 CleanupHandles();
 
@@ -153,7 +203,14 @@ namespace FishNet.Transporting.EpicNetPlugin
             {
                 if (_isShuttingDown) return;
                 _transport.LogDebug($"[Client] Disconnected: {data.Reason}");
-                _deferredStopRequested = true;
+                if (_autoReconnect)
+                {
+                    _isInterrupted = true;
+                }
+                else
+                {
+                    _deferredStopRequested = true;
+                }
             }
             catch (Exception e) { Debug.LogError($"[Client] OnClosed: {e.Message}"); }
         }
@@ -168,6 +225,21 @@ namespace FishNet.Transporting.EpicNetPlugin
         {
             if (GetLocalConnectionState() != LocalConnectionState.Started || _isInterrupted) return;
             ProcessRetryQueue();
+            ProcessReconnect();
+        }
+
+        void ProcessReconnect()
+        {
+            if (!_autoReconnect || !_isInterrupted || _reconnecting || _reconnectAttempt >= _maxReconnectAttempts) return;
+            _reconnectTimer += Time.deltaTime;
+            float delay = Mathf.Min(_reconnectDelayBase * Mathf.Pow(2, _reconnectAttempt - 1), _reconnectDelayMax);
+            if (_reconnectTimer < delay) return;
+
+            _reconnectAttempt++;
+            _reconnecting = true;
+            _reconnectTimer = 0f;
+            _transport.LogDebug($"[Client] Reconnect attempt {_reconnectAttempt}/{_maxReconnectAttempts}");
+            StartConnection(); 
         }
 
         internal void IterateIncoming()

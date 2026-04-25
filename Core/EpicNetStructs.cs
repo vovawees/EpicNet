@@ -22,6 +22,14 @@ namespace FishNet.Transporting.EpicNetPlugin
             GetPlatformInterface()?.GetP2PInterface();
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static LobbyInterface GetLobbyInterface() =>
+            GetPlatformInterface()?.GetLobbyInterface();
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static VoiceInterface GetVoiceInterface() =>
+            GetPlatformInterface()?.GetVoiceInterface();
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static ConnectInterface GetConnectInterface() =>
             GetPlatformInterface()?.GetConnectInterface();
 
@@ -35,18 +43,34 @@ namespace FishNet.Transporting.EpicNetPlugin
         internal static bool IsReady() => EOSManager.Instance != null;
     }
 
+    public enum ChannelPriority : byte
+    {
+        Default = 0,
+        High = 1,
+        Low = 2
+    }
+
+    public enum RelayControl : byte
+    {
+        NoRelays = 0,
+        AllowRelays = 1,
+        ForceRelays = 2
+    }
+
     internal readonly struct LocalPacket
     {
         public readonly byte[] Data;
         public readonly int Length;
         public readonly Channel Channel;
+        public readonly ChannelPriority Priority;
 
-        public LocalPacket(ArraySegment<byte> data, byte channelId)
+        public LocalPacket(ArraySegment<byte> data, byte channelId, ChannelPriority priority = ChannelPriority.Default)
         {
             Length = data.Count;
             Data = ByteArrayPool.Retrieve(Length);
             Buffer.BlockCopy(data.Array, data.Offset, Data, 0, Length);
             Channel = (Channel)channelId;
+            Priority = priority;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -86,6 +110,14 @@ namespace FishNet.Transporting.EpicNetPlugin
         public float timeout = 30f;
     }
 
+    [Serializable]
+    public sealed class ChannelSettings
+    {
+        public byte channelId;
+        public bool isReliable;
+        public ChannelPriority priority = ChannelPriority.Default;
+    }
+
     internal struct PendingPacket
     {
         public ProductUserId LocalUserId;
@@ -95,6 +127,7 @@ namespace FishNet.Transporting.EpicNetPlugin
         public byte[] Data;
         public int Length;
         public int RetryCount;
+        public ChannelPriority Priority;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void ReturnToPool()
@@ -110,12 +143,14 @@ namespace FishNet.Transporting.EpicNetPlugin
         public int Length;
         public byte ChannelId;
         public int ConnectionId;
+        public ChannelPriority Priority;
 
-        public ThreadedPacket(byte channelId, ArraySegment<byte> segment, int connectionId = -1)
+        public ThreadedPacket(byte channelId, ArraySegment<byte> segment, int connectionId = -1, ChannelPriority priority = ChannelPriority.Default)
         {
             ChannelId = channelId;
             Length = segment.Count;
             ConnectionId = connectionId;
+            Priority = priority;
             Data = ByteArrayPool.Retrieve(Length);
             Buffer.BlockCopy(segment.Array, segment.Offset, Data, 0, Length);
         }

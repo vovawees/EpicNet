@@ -65,14 +65,11 @@ namespace FishNet.Transporting.EpicNetPlugin
             return true;
         }
 
-        internal Result Send(ProductUserId localUserId, ProductUserId remoteUserId, SocketId socketId,
-            byte channelId, ArraySegment<byte> segment)
+        internal void SendWithPriority(ProductUserId localUserId, ProductUserId remoteUserId, SocketId socketId,
+            byte channelId, ArraySegment<byte> segment, ChannelPriority priority)
         {
-            if (GetLocalConnectionState() != LocalConnectionState.Started)
-                return Result.InvalidState;
-
-            if (!CheckMainThread())
-                return Result.InvalidState;
+            if (GetLocalConnectionState() != LocalConnectionState.Started) return;
+            if (!CheckMainThread()) return;
 
             bool isReliable = (channelId % 2 == 0);
             var reliability = isReliable ? PacketReliability.ReliableOrdered : PacketReliability.UnreliableUnordered;
@@ -89,7 +86,7 @@ namespace FishNet.Transporting.EpicNetPlugin
             };
 
             var p2p = EOS.GetP2PInterface();
-            if (p2p is null) return Result.InvalidState;
+            if (p2p is null) return;
 
             var result = p2p.SendPacket(ref sendOptions);
 
@@ -99,7 +96,7 @@ namespace FishNet.Transporting.EpicNetPlugin
                 {
                     Interlocked.Increment(ref _transport.Stats.DroppedPackets);
                     _transport.LogErr("[EpicNet] Retry queue full — dropping reliable packet!");
-                    return Result.LimitExceeded;
+                    return;
                 }
 
                 var buf = ByteArrayPool.Retrieve(segment.Count);
@@ -108,34 +105,34 @@ namespace FishNet.Transporting.EpicNetPlugin
                 {
                     LocalUserId = localUserId, RemoteUserId = remoteUserId,
                     SocketId = socketId, ChannelId = channelId,
-                    Data = buf, Length = segment.Count, RetryCount = 0
+                    Data = buf, Length = segment.Count, RetryCount = 0,
+                    Priority = priority
                 });
-                return Result.Success;
             }
-
-            if (result != Result.Success)
+            else if (result != Result.Success)
                 _transport.LogWarn($"[EpicNet] Send failed → {remoteUserId} size={segment.Count} err={result}");
-
-            return result;
         }
 
         internal void ProcessRetryQueue()
         {
             int count = _retryQueue.Count;
             if (count == 0) return;
-
             _transport.Stats.RetryQueueSize = count;
 
             var p2p = EOS.GetP2PInterface();
             if (p2p is null) { DrainRetryQueue(); return; }
 
+            var sorted = new List<PendingPacket>(count);
+            while (_retryQueue.Count > 0) sorted.Add(_retryQueue.Dequeue());
+            sorted.Sort((a, b) => b.Priority.CompareTo(a.Priority)); 
+
             int processed = 0;
-            for (int i = 0; i < count && processed < _maxRetryProcessPerFrame; i++)
+            for (int i = 0; i < sorted.Count && processed < _maxRetryProcessPerFrame; i++)
             {
-                var pending = _retryQueue.Dequeue();
+                var pending = sorted[i];
                 bool isReliable = (pending.ChannelId % 2 == 0);
 
-                var sendOptions = new SendPacketOptions
+                var sendOpt = new SendPacketOptions
                 {
                     LocalUserId = pending.LocalUserId,
                     RemoteUserId = pending.RemoteUserId,
@@ -145,30 +142,34 @@ namespace FishNet.Transporting.EpicNetPlugin
                     Reliability = isReliable ? PacketReliability.ReliableOrdered : PacketReliability.UnreliableUnordered,
                     AllowDelayedDelivery = true
                 };
-
-                var result = p2p.SendPacket(ref sendOptions);
+                var result = p2p.SendPacket(ref sendOpt);
                 processed++;
 
                 if (result == Result.LimitExceeded && pending.RetryCount < _maxRetryFrames)
                 {
                     pending.RetryCount++;
-                    _retryQueue.Enqueue(pending);
+                    sorted[i] = pending;
                 }
                 else
                 {
                     if (result != Result.Success)
                     {
                         _transport.LogWarn($"[EpicNet] Retry #{pending.RetryCount} failed: {result}");
-                        
                         if (isReliable)
                         {
-                            _transport.LogErr($"[EpicNet] CRITICAL: Reliable packet dropped! Disconnecting {pending.RemoteUserId} to prevent state desync.");
+                            _transport.LogErr($"[EpicNet] CRITICAL: Reliable packet dropped! Disconnecting {pending.RemoteUserId}");
                             var co = new CloseConnectionOptions { SocketId = pending.SocketId, LocalUserId = pending.LocalUserId, RemoteUserId = pending.RemoteUserId };
                             p2p.CloseConnection(ref co);
                         }
                     }
                     pending.ReturnToPool();
+                    sorted[i] = default;
                 }
+            }
+            for (int i = processed; i < sorted.Count; i++)
+            {
+                if (sorted[i].Data != null)
+                    _retryQueue.Enqueue(sorted[i]);
             }
         }
 
@@ -181,11 +182,7 @@ namespace FishNet.Transporting.EpicNetPlugin
         protected bool Receive(ProductUserId localUserId, out ProductUserId remoteUserId,
             out byte[] buffer, out int length, out byte channelId)
         {
-            remoteUserId = null;
-            buffer = null;
-            length = 0;
-            channelId = 0;
-
+            remoteUserId = null; buffer = null; length = 0; channelId = 0;
             if (localUserId is null) return false;
             if (!CheckMainThread()) return false;
 
@@ -194,14 +191,12 @@ namespace FishNet.Transporting.EpicNetPlugin
 
             var getSizeOpt = new GetNextReceivedPacketSizeOptions { LocalUserId = localUserId };
             var sizeResult = p2p.GetNextReceivedPacketSize(ref getSizeOpt, out var packetSize);
-
             if (sizeResult == Result.NotFound) return false;
             if (sizeResult != Result.Success)
             {
                 _transport.LogErr($"[EpicNet] GetNextReceivedPacketSize: {sizeResult}");
                 return false;
             }
-
             if (packetSize > P2PInterface.MAX_PACKET_SIZE)
             {
                 var trash = ByteArrayPool.Retrieve((int)packetSize);
@@ -211,7 +206,6 @@ namespace FishNet.Transporting.EpicNetPlugin
                 p2p.ReceivePacket(ref trashOpt, ref u, ref s, out _, trashSeg, out _);
                 ByteArrayPool.Store(trash);
                 Interlocked.Increment(ref _transport.Stats.DroppedPackets);
-                _transport.LogWarn($"[EpicNet] SECURITY: Dropped oversized packet ({packetSize}b)");
                 return false;
             }
 
@@ -226,7 +220,6 @@ namespace FishNet.Transporting.EpicNetPlugin
                 {
                     ByteArrayPool.Store(buffer);
                     buffer = null; length = 0;
-                    _transport.LogErr($"[EpicNet] ReceivePacket: {recvResult}");
                     return false;
                 }
                 length = (int)bytesWritten;

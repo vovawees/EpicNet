@@ -1,8 +1,13 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Epic.OnlineServices;
+using Epic.OnlineServices.Lobby;
 using Epic.OnlineServices.P2P;
 using FishNet.Utility.Performance;
 using UnityEngine;
@@ -42,6 +47,22 @@ namespace FishNet.Transporting.EpicNetPlugin
 
         readonly object _lock = new object();
 
+        LobbyInterface _lobby;
+        ulong? _lobbyId;
+        string _lobbyName;
+        bool _enableLobbies;
+
+        Dictionary<int, float> _lastKeepAlive = new Dictionary<int, float>();
+        float _keepAliveInterval = 2f;
+        float _keepAliveTimeout = 10f;
+        bool _enableKeepAlive;
+
+        UdpClient _lanUdp;
+        bool _enableLanDiscovery;
+        const int LAN_PORT = 7776;
+        const string LAN_DISCOVERY_MSG = "EPICNET_LAN_QUERY";
+        const string LAN_RESPONSE_PREFIX = "EPICNET_LAN_SERVER";
+
         ClientHostBridge _clientHostBridge;
 
         internal void SetSecurityLimits(int maxConnPerSec, int maxPending, float timeout, int maxBurst)
@@ -55,6 +76,24 @@ namespace FishNet.Transporting.EpicNetPlugin
         internal void SetClientHostBridge(ClientHostBridge bridge)
         {
             _clientHostBridge = bridge;
+        }
+
+        public void SetLobbySettings(bool enable, string lobbyName)
+        {
+            _enableLobbies = enable;
+            _lobbyName = lobbyName;
+        }
+
+        public void SetKeepAlive(bool enable, float interval, float timeout)
+        {
+            _enableKeepAlive = enable;
+            _keepAliveInterval = interval;
+            _keepAliveTimeout = timeout;
+        }
+
+        public void SetLanDiscovery(bool enable)
+        {
+            _enableLanDiscovery = enable;
         }
 
         internal bool StartConnection()
@@ -99,6 +138,16 @@ namespace FishNet.Transporting.EpicNetPlugin
                     return;
                 }
 
+#if UNITY_EDITOR || !UNITY_EDITOR 
+                try {
+                    var relayProp = _transport.GetType().GetProperty("RelayPolicy");
+                    var relayVal = relayProp != null ? (RelayControl)relayProp.GetValue(_transport) : RelayControl.NoRelays;
+                    p2p.SetRelayControl(new SetRelayControlOptions { RelayControl = relayVal });
+                } catch { }
+#else
+                p2p.SetRelayControl(new SetRelayControlOptions { RelayControl = (RelayControl)_transport.RelayPolicy });
+#endif
+
                 var qOpt = new SetPacketQueueSizeOptions
                 { IncomingPacketQueueMaxSizeBytes = 4 * 1024 * 1024, OutgoingPacketQueueMaxSizeBytes = 4 * 1024 * 1024 };
                 p2p.SetPacketQueueSize(ref qOpt);
@@ -114,6 +163,43 @@ namespace FishNet.Transporting.EpicNetPlugin
 
                 var iOpt = new AddNotifyPeerConnectionInterruptedOptions { SocketId = _socketId, LocalUserId = _localUserId };
                 _interruptedHandle = p2p.AddNotifyPeerConnectionInterrupted(ref iOpt, null, OnInterrupted);
+
+                if (_enableLobbies)
+                {
+                    _lobby = EOS.GetLobbyInterface();
+                    var createOpt = new CreateLobbyOptions { LocalUserId = _localUserId, MaxLobbyMembers = (uint)_maximumClients, PresencePermission = LobbyPermissionLevel.Publicadvertised };
+                    var lobbyResult = await Task.Run(() =>
+                    {
+                        var tcs = new TaskCompletionSource<Result>();
+                        _lobby.CreateLobby(ref createOpt, null, (ref CreateLobbyCallbackInfo info) => tcs.TrySetResult(info.ResultCode));
+                        return tcs.Task;
+                    }, ct);
+                    if (lobbyResult != Result.Success)
+                        _transport.LogWarn($"[Server] Lobby creation failed: {lobbyResult}");
+                    else
+                        _transport.LogDebug("[Server] Lobby created.");
+                }
+
+                if (_enableLanDiscovery)
+                {
+                    try
+                    {
+                        _lanUdp = new UdpClient(LAN_PORT);
+                        _ = Task.Run(async () =>
+                        {
+                            while (!_isShuttingDown)
+                            {
+                                var recv = await _lanUdp.ReceiveAsync().ConfigureAwait(false);
+                                if (Encoding.UTF8.GetString(recv.Buffer) == LAN_DISCOVERY_MSG)
+                                {
+                                    var resp = Encoding.UTF8.GetBytes($"{LAN_RESPONSE_PREFIX}:{_transport.SocketName}:{_localUserId}");
+                                    await _lanUdp.SendAsync(resp, resp.Length, recv.RemoteEndPoint).ConfigureAwait(false);
+                                }
+                            }
+                        }, ct);
+                    }
+                    catch { _transport.LogWarn("[Server] LAN Discovery failed to start."); }
+                }
 
                 _transport.LogDebug("[Server] Started listening");
                 SetLocalConnectionState(LocalConnectionState.Started, true);
@@ -371,6 +457,24 @@ namespace FishNet.Transporting.EpicNetPlugin
             ProcessRetryQueue();
             CleanupPendingConnections();
             _clientHostBridge?.ProcessServerIncoming();
+            ProcessKeepAlive();
+        }
+
+        void ProcessKeepAlive()
+        {
+            if (!_enableKeepAlive) return;
+            float now = Time.unscaledTime;
+            lock (_lock)
+            {
+                foreach (var kv in new List<KeyValuePair<int, float>>(_lastKeepAlive))
+                {
+                    if (now - kv.Value > _keepAliveTimeout)
+                    {
+                        _transport.LogWarn($"[Server] Keep-alive timeout for client {kv.Key}");
+                        StopConnection(kv.Key);
+                    }
+                }
+            }
         }
 
         internal void CleanupPendingConnections()
