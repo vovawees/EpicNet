@@ -85,6 +85,11 @@ namespace FishNet.Transporting.EpicNetPlugin
             ClearQueues();
             _serverStarted = false;
             _clientHostStarted = false;
+        }
+
+        internal void Reset()
+        {
+            Stop();
             _server = null;
             _clientHost = null;
         }

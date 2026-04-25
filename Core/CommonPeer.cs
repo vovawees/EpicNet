@@ -133,11 +133,13 @@ namespace FishNet.Transporting.EpicNetPlugin
             _retryList.Sort((a, b) => b.Priority.CompareTo(a.Priority));
 
             int processed = 0;
-            for (int i = 0; i < _retryList.Count && processed < _maxRetryProcessPerFrame; i++)
+            for (int i = 0; i < _retryList.Count; i++)
             {
                 var pending = _retryList[i];
-                bool isReliable = (pending.ChannelId % 2 == 0);
+                if (pending.Data == null) continue;
+                if (processed >= _maxRetryProcessPerFrame) break;
 
+                bool isReliable = (pending.ChannelId % 2 == 0);
                 var sendOpt = new SendPacketOptions
                 {
                     LocalUserId = pending.LocalUserId,
@@ -173,11 +175,10 @@ namespace FishNet.Transporting.EpicNetPlugin
                 }
             }
 
-            for (int i = processed; i < _retryList.Count; i++)
-            {
-                if (_retryList[i].Data != null)
-                    _retryQueue.Enqueue(_retryList[i]);
-            }
+            foreach (var p in _retryList)
+                if (p.Data != null)
+                    _retryQueue.Enqueue(p);
+            _retryList.Clear();
         }
 
         protected void DrainRetryQueue()

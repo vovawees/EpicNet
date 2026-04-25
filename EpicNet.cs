@@ -294,6 +294,7 @@ namespace FishNet.Transporting.EpicNetPlugin
             StopConnection(false);
             StopConnection(true);
             DrainAllQueues();
+            _clientHostBridge.Reset();
             Stats.Reset();
         }
 

@@ -147,12 +147,17 @@ namespace FishNet.Transporting.EpicNetPlugin
                         {
                             while (!_isShuttingDown)
                             {
-                                var recv = await _lanUdp.ReceiveAsync();
-                                if (Encoding.UTF8.GetString(recv.Buffer) == "EPICNET_LAN_QUERY")
+                                try
                                 {
-                                    var resp = Encoding.UTF8.GetBytes($"EPICNET_LAN_SERVER:{_transport.SocketName}:{_localUserId}");
-                                    await _lanUdp.SendAsync(resp, resp.Length, recv.RemoteEndPoint);
+                                    var recv = await _lanUdp.ReceiveAsync();
+                                    if (Encoding.UTF8.GetString(recv.Buffer) == "EPICNET_LAN_QUERY")
+                                    {
+                                        var resp = Encoding.UTF8.GetBytes($"EPICNET_LAN_SERVER:{_transport.SocketName}:{_localUserId}");
+                                        await _lanUdp.SendAsync(resp, resp.Length, recv.RemoteEndPoint);
+                                    }
                                 }
+                                catch (ObjectDisposedException) { break; }
+                                catch (Exception) { }
                             }
                         }, ct);
                     }
@@ -199,11 +204,17 @@ namespace FishNet.Transporting.EpicNetPlugin
                     int id = _nextId++;
                     if (id < 1) { _nextId = 1; id = _nextId++; }
                     if (id == EpicNet.CLIENT_HOST_ID) id = _nextId++;
+                    int idAttempts = 0;
                     while (_clientsById.ContainsKey(id) || _pendingConnectionsContainsId(id))
                     {
                         id = _nextId++;
                         if (id < 1) { _nextId = 1; id = _nextId++; }
                         if (id == EpicNet.CLIENT_HOST_ID) id = _nextId++;
+                        if (++idAttempts > 10000)
+                        {
+                            _transport.LogErr("[Server] Failed to generate unique connection id.");
+                            return;
+                        }
                     }
 
                     var conn = new Connection(id, data.LocalUserId, data.RemoteUserId, _socketId);
