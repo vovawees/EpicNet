@@ -213,6 +213,7 @@ namespace FishNet.Transporting.EpicNetPlugin
                         if (++idAttempts > 10000)
                         {
                             _transport.LogErr("[Server] Failed to generate unique connection id.");
+                            RejectRequest(ref data);
                             return;
                         }
                     }
