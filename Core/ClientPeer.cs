@@ -1,10 +1,8 @@
 using System;
-using System.Collections.Concurrent;
 using System.Threading;
 using System.Threading.Tasks;
 using Epic.OnlineServices;
 using Epic.OnlineServices.P2P;
-using FishNet.Utility.Performance;
 using UnityEngine;
 
 namespace FishNet.Transporting.EpicNetPlugin
@@ -48,7 +46,6 @@ namespace FishNet.Transporting.EpicNetPlugin
             _ = StartAsync(_authCts.Token);
         }
 
-
         async Task StartAsync(CancellationToken ct)
         {
             try
@@ -70,6 +67,12 @@ namespace FishNet.Transporting.EpicNetPlugin
                 }
 
                 _localUserId = EOS.LocalProductUserId;
+                if (_localUserId == null || !_localUserId.IsValid())
+                {
+                    _transport.LogErr("[Client] Invalid local user.");
+                    SetLocalConnectionState(LocalConnectionState.Stopped, false);
+                    return;
+                }
                 _remoteUserId = ProductUserId.FromString(_transport.RemoteProductUserId);
                 if (_remoteUserId == null || !_remoteUserId.IsValid())
                 {
@@ -138,12 +141,17 @@ namespace FishNet.Transporting.EpicNetPlugin
         void ProcessReconnect()
         {
             if (!_autoReconnect || !_isInterrupted) return;
+            if (!_manuallyStarted)
+            {
+                StopConnection();
+                return;
+            }
             _reconnectTimer += Time.unscaledDeltaTime;
             float delay = Mathf.Min(_reconnectDelayBase * Mathf.Pow(2, _reconnectAttempt), _reconnectDelayMax);
             if (_reconnectTimer < delay) return;
             _reconnectTimer = 0f;
             _reconnectAttempt++;
-            
+
             if (_reconnectAttempt >= _maxReconnectAttempts)
             {
                 _transport.LogErr($"[Client] Reconnect timeout after {_maxReconnectAttempts} attempts.");
@@ -164,11 +172,14 @@ namespace FishNet.Transporting.EpicNetPlugin
                 if (data.ConnectionType == ConnectionEstablishedType.Reconnection)
                 {
                     _isInterrupted = false;
+                    _reconnectAttempt = 0;
+                    _reconnectTimer = 0f;
                     _transport.LogDebug("[Client] Reconnected");
                     return;
                 }
                 _isInterrupted = false;
                 _reconnectAttempt = 0;
+                _reconnectTimer = 0f;
                 SetLocalConnectionState(LocalConnectionState.Started, false);
             }
             catch (Exception e) { Debug.LogError($"[Client] OnEstablished: {e.Message}"); }
@@ -202,6 +213,7 @@ namespace FishNet.Transporting.EpicNetPlugin
         {
             if (GetLocalConnectionState() is LocalConnectionState.Stopped or LocalConnectionState.Stopping) return false;
             _isShuttingDown = true;
+            _manuallyStarted = false;
             SetLocalConnectionState(LocalConnectionState.Stopping, false);
             var oldCts = Interlocked.Exchange(ref _authCts, null);
             oldCts?.Cancel();
@@ -241,7 +253,7 @@ namespace FishNet.Transporting.EpicNetPlugin
             while (processed < _maxIncomingPacketsPerFrame && Receive(_localUserId, out _, out var buf, out int len, out byte ch))
             {
                 processed++;
-                queue.Enqueue(new ThreadedPacket { ChannelId = ch, Data = buf, Length = len, ConnectionId = -1 });
+                queue.Enqueue(new ThreadedPacket(ch, new ArraySegment<byte>(buf, 0, len), -1));
             }
         }
 

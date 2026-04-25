@@ -15,6 +15,7 @@ namespace FishNet.Transporting.EpicNetPlugin
         protected EpicNet _transport;
         protected int _mainThreadId;
         readonly Queue<PendingPacket> _retryQueue = new Queue<PendingPacket>(32);
+        readonly List<PendingPacket> _retryList = new List<PendingPacket>(32);
 
         protected int _maxRetryQueueSize = 1024;
         protected int _maxRetryFrames = 120;
@@ -68,6 +69,7 @@ namespace FishNet.Transporting.EpicNetPlugin
         internal void SendWithPriority(ProductUserId localUserId, ProductUserId remoteUserId, SocketId socketId,
             byte channelId, ArraySegment<byte> segment, ChannelPriority priority)
         {
+            if (localUserId == null || remoteUserId == null) return;
             if (GetLocalConnectionState() != LocalConnectionState.Started) return;
             if (!CheckMainThread()) return;
 
@@ -126,14 +128,14 @@ namespace FishNet.Transporting.EpicNetPlugin
             var p2p = EOS.GetP2PInterface();
             if (p2p is null) { DrainRetryQueue(); return; }
 
-            var sorted = new List<PendingPacket>(count);
-            while (_retryQueue.Count > 0) sorted.Add(_retryQueue.Dequeue());
-            sorted.Sort((a, b) => b.Priority.CompareTo(a.Priority));
+            _retryList.Clear();
+            while (_retryQueue.Count > 0) _retryList.Add(_retryQueue.Dequeue());
+            _retryList.Sort((a, b) => b.Priority.CompareTo(a.Priority));
 
             int processed = 0;
-            for (int i = 0; i < sorted.Count && processed < _maxRetryProcessPerFrame; i++)
+            for (int i = 0; i < _retryList.Count && processed < _maxRetryProcessPerFrame; i++)
             {
-                var pending = sorted[i];
+                var pending = _retryList[i];
                 bool isReliable = (pending.ChannelId % 2 == 0);
 
                 var sendOpt = new SendPacketOptions
@@ -152,7 +154,7 @@ namespace FishNet.Transporting.EpicNetPlugin
                 if (result == Result.LimitExceeded && pending.RetryCount < _maxRetryFrames)
                 {
                     pending.RetryCount++;
-                    sorted[i] = pending;
+                    _retryList[i] = pending;
                 }
                 else
                 {
@@ -167,14 +169,14 @@ namespace FishNet.Transporting.EpicNetPlugin
                         }
                     }
                     pending.ReturnToPool();
-                    sorted[i] = default;
+                    _retryList[i] = default;
                 }
             }
 
-            for (int i = processed; i < sorted.Count; i++)
+            for (int i = processed; i < _retryList.Count; i++)
             {
-                if (sorted[i].Data != null)
-                    _retryQueue.Enqueue(sorted[i]);
+                if (_retryList[i].Data != null)
+                    _retryQueue.Enqueue(_retryList[i]);
             }
         }
 
@@ -231,11 +233,12 @@ namespace FishNet.Transporting.EpicNetPlugin
                 }
                 length = (int)bytesWritten;
             }
-            catch
+            catch (Exception e)
             {
+                _transport.LogErr($"[EpicNet] Receive exception: {e.Message}");
                 ByteArrayPool.Store(buffer);
                 buffer = null; length = 0;
-                throw;
+                return false;
             }
 
             Interlocked.Increment(ref _transport.Stats.PacketsReceived);

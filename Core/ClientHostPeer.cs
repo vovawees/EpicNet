@@ -8,6 +8,7 @@ namespace FishNet.Transporting.EpicNetPlugin
     {
         ClientHostBridge _bridge;
         Queue<LocalPacket> _incoming = new Queue<LocalPacket>(64);
+        const int MaxIncomingQueue = 256;
 
         internal void Bind(ClientHostBridge bridge) => _bridge = bridge;
 
@@ -59,7 +60,15 @@ namespace FishNet.Transporting.EpicNetPlugin
             }
         }
 
-        internal void InternalReceiveFromServer(LocalPacket packet) => _incoming.Enqueue(packet);
+        internal void InternalReceiveFromServer(LocalPacket packet)
+        {
+            if (_incoming.Count >= MaxIncomingQueue)
+            {
+                packet.ReturnToPool();
+                return;
+            }
+            _incoming.Enqueue(packet);
+        }
 
         internal void SendToServer(byte channelId, ArraySegment<byte> segment, ChannelPriority priority = ChannelPriority.Default)
         {

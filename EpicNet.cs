@@ -123,18 +123,25 @@ namespace FishNet.Transporting.EpicNetPlugin
             if (!EOS.IsReady()) { Shutdown(); return; }
             _clientHost.PollServerReady();
             _client.CheckDeferredStop();
+
             if (enableThreadedMode)
             {
                 ProcessThreadedSending();
                 ProcessThreadedReceiving();
-                if (_server.GetLocalConnectionState() == LocalConnectionState.Started)
-                {
-                    _server.ProcessRetryQueue();
-                    _server.CleanupPendingConnections();
-                }
-                if (_client.GetLocalConnectionState() == LocalConnectionState.Started)
-                    _client.ProcessRetryQueue();
             }
+
+            if (_server.GetLocalConnectionState() == LocalConnectionState.Started)
+            {
+                _server.ProcessRetryQueue();
+                _server.CleanupPendingConnections();
+                _clientHostBridge.ProcessServerIncoming();
+            }
+            if (_clientHost.GetLocalConnectionState() == LocalConnectionState.Started)
+            {
+                _clientHostBridge.ProcessClientHostIncoming();
+                _clientHost.IterateIncoming();
+            }
+
             if (showStats) Stats.Calculate();
         }
 
@@ -196,12 +203,10 @@ namespace FishNet.Transporting.EpicNetPlugin
             {
                 if (server)
                 {
-                    _server.InternalReceiveFromClientHost(new LocalPacket(default(ArraySegment<byte>), 0));
                     DrainIncomingQueue(_threadedServerIn, true);
                 }
                 else
                 {
-                    _clientHost.IterateIncoming();
                     DrainIncomingQueue(_threadedClientIn, false);
                 }
             }
@@ -249,7 +254,7 @@ namespace FishNet.Transporting.EpicNetPlugin
         public override void SendToServer(byte channelId, ArraySegment<byte> segment)
         {
             if (enableThreadedMode)
-                _threadedClientOut.Enqueue(new ThreadedPacket(channelId, segment));
+                _threadedClientOut?.Enqueue(new ThreadedPacket(channelId, segment));
             else
             {
                 if (_clientHost.GetLocalConnectionState() == LocalConnectionState.Started)
@@ -264,7 +269,7 @@ namespace FishNet.Transporting.EpicNetPlugin
         public override void SendToClient(byte channelId, ArraySegment<byte> segment, int connectionId)
         {
             if (enableThreadedMode)
-                _threadedServerOut.Enqueue(new ThreadedPacket(channelId, segment, connectionId));
+                _threadedServerOut?.Enqueue(new ThreadedPacket(channelId, segment, connectionId));
             else
             {
                 _server.SendToClient(channelId, segment, connectionId);

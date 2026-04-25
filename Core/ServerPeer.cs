@@ -104,6 +104,12 @@ namespace FishNet.Transporting.EpicNetPlugin
                 if (ct.IsCancellationRequested) { SetLocalConnectionState(LocalConnectionState.Stopped, true); return; }
 
                 _localUserId = EOS.LocalProductUserId;
+                if (_localUserId == null || !_localUserId.IsValid())
+                {
+                    _transport.LogErr("[Server] Invalid local user.");
+                    SetLocalConnectionState(LocalConnectionState.Stopped, true);
+                    return;
+                }
                 _socketId = new SocketId { SocketName = _transport.SocketName };
                 var p2p = EOS.GetP2PInterface();
                 if (p2p is null) { SetLocalConnectionState(LocalConnectionState.Stopped, true); return; }
@@ -165,6 +171,8 @@ namespace FishNet.Transporting.EpicNetPlugin
             try
             {
                 if (_isShuttingDown) return;
+                if (data.RemoteUserId == null || !data.RemoteUserId.IsValid()) return;
+
                 float now = Time.unscaledTime;
                 lock (_lock)
                 {
@@ -230,6 +238,7 @@ namespace FishNet.Transporting.EpicNetPlugin
 
         void RejectRequest(ref OnIncomingConnectionRequestInfo reqData)
         {
+            if (reqData.RemoteUserId == null) return;
             var p2p = EOS.GetP2PInterface();
             if (p2p is null) return;
             var co = new CloseConnectionOptions { SocketId = _socketId, LocalUserId = _localUserId, RemoteUserId = reqData.RemoteUserId };
@@ -241,6 +250,7 @@ namespace FishNet.Transporting.EpicNetPlugin
             try
             {
                 if (_isShuttingDown) return;
+                if (data.RemoteUserId == null) return;
                 lock (_lock)
                 {
                     if (data.ConnectionType == ConnectionEstablishedType.Reconnection)
@@ -270,6 +280,7 @@ namespace FishNet.Transporting.EpicNetPlugin
             try
             {
                 if (_isShuttingDown) return;
+                if (data.RemoteUserId == null) return;
                 int idToRemove = -1;
                 lock (_lock)
                 {
@@ -289,6 +300,7 @@ namespace FishNet.Transporting.EpicNetPlugin
             try
             {
                 if (_isShuttingDown) return;
+                if (data.RemoteUserId == null) return;
                 lock (_lock) _interruptedUsers.Add(data.RemoteUserId);
                 _transport.LogWarn($"[Server] Interrupted: {data.RemoteUserId}");
             }
@@ -374,10 +386,10 @@ namespace FishNet.Transporting.EpicNetPlugin
                     idToRemove = connectionId;
                 }
             }
-            if (idToRemove >= 0)
+            if (idToRemove >= 0 && remoteUserIdToRemove != null)
             {
                 var p2p = EOS.GetP2PInterface();
-                if (p2p is not null && remoteUserIdToRemove != null)
+                if (p2p is not null)
                 {
                     var co = new CloseConnectionOptions { SocketId = _socketId, LocalUserId = _localUserId, RemoteUserId = remoteUserIdToRemove };
                     p2p.CloseConnection(ref co);
@@ -387,7 +399,6 @@ namespace FishNet.Transporting.EpicNetPlugin
             }
             return false;
         }
-
 
         internal RemoteConnectionState GetConnectionState(int id)
         {
@@ -456,6 +467,11 @@ namespace FishNet.Transporting.EpicNetPlugin
             while (processed < _maxIncomingPacketsPerFrame && Receive(_localUserId, out var remoteUserId, out var buf, out int len, out byte ch))
             {
                 processed++;
+                if (remoteUserId == null)
+                {
+                    ByteArrayPool.Store(buf);
+                    continue;
+                }
                 var seg = new ArraySegment<byte>(buf, 0, len);
                 int connId;
                 lock (_lock)
@@ -477,6 +493,11 @@ namespace FishNet.Transporting.EpicNetPlugin
             while (processed < _maxIncomingPacketsPerFrame && Receive(_localUserId, out var remoteUserId, out var buf, out int len, out byte ch))
             {
                 processed++;
+                if (remoteUserId == null)
+                {
+                    ByteArrayPool.Store(buf);
+                    continue;
+                }
                 int connId;
                 lock (_lock)
                 {
@@ -485,7 +506,7 @@ namespace FishNet.Transporting.EpicNetPlugin
                     if (_enableKeepAlive)
                         _lastKeepAlive[connId] = Time.unscaledTime;
                 }
-                queue.Enqueue(new ThreadedPacket { ChannelId = ch, Data = buf, Length = len, ConnectionId = connId });
+                queue.Enqueue(new ThreadedPacket(ch, new ArraySegment<byte>(buf, 0, len), connId));
             }
         }
 
@@ -513,7 +534,6 @@ namespace FishNet.Transporting.EpicNetPlugin
         {
             var seg = new ArraySegment<byte>(pkt.Data, 0, pkt.Length);
             _transport.HandleServerReceivedDataArgs(new ServerReceivedDataArgs(seg, pkt.Channel, EpicNet.CLIENT_HOST_ID, _transport.Index));
-            pkt.ReturnToPool();
         }
 
         internal string GetConnectionAddress(int id)

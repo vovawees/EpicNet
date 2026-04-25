@@ -9,6 +9,7 @@ namespace FishNet.Transporting.EpicNetPlugin
         ClientHostPeer _clientHost;
         Queue<LocalPacket> _serverToClient = new Queue<LocalPacket>(64);
         Queue<LocalPacket> _clientToServer = new Queue<LocalPacket>(64);
+        const int MaxQueueSize = 256;
 
         internal bool _serverStarted;
         internal bool _clientHostStarted;
@@ -34,12 +35,22 @@ namespace FishNet.Transporting.EpicNetPlugin
         internal void ServerSendToClient(LocalPacket packet)
         {
             if (!_serverStarted || !_clientHostStarted) return;
+            if (_serverToClient.Count >= MaxQueueSize)
+            {
+                packet.ReturnToPool();
+                return;
+            }
             _serverToClient.Enqueue(packet);
         }
 
         internal void ClientSendToServer(LocalPacket packet)
         {
             if (!_serverStarted || !_clientHostStarted) return;
+            if (_clientToServer.Count >= MaxQueueSize)
+            {
+                packet.ReturnToPool();
+                return;
+            }
             _clientToServer.Enqueue(packet);
         }
 
