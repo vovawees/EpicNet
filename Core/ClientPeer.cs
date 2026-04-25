@@ -87,7 +87,8 @@ namespace FishNet.Transporting.EpicNetPlugin
                 var p2p = EOS.GetP2PInterface();
                 if (p2p is null) { SetLocalConnectionState(LocalConnectionState.Stopped, false); return; }
 
-                p2p.SetRelayControl(new SetRelayControlOptions { RelayControl = (RelayControl)_transport.RelayPolicyValue });
+                var relayOptions = new SetRelayControlOptions { RelayControl = (RelayControl)_transport.RelayPolicyValue };
+                p2p.SetRelayControl(ref relayOptions);
 
                 CleanupHandles();
 
