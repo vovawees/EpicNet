@@ -6,7 +6,6 @@ using Epic.OnlineServices.Connect;
 using Epic.OnlineServices.P2P;
 using Epic.OnlineServices.Platform;
 using Epic.OnlineServices.Lobby;
-using Epic.OnlineServices.Voice;
 using FishNet.Utility.Performance;
 using PlayEveryWare.EpicOnlineServices;
 using UnityEngine;
@@ -26,10 +25,6 @@ namespace FishNet.Transporting.EpicNetPlugin
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static LobbyInterface GetLobbyInterface() =>
             GetPlatformInterface()?.GetLobbyInterface();
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static VoiceInterface GetVoiceInterface() =>
-            GetPlatformInterface()?.GetVoiceInterface();
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static ConnectInterface GetConnectInterface() =>
